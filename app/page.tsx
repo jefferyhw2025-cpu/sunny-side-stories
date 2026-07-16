@@ -60,16 +60,44 @@ export default function Home() {
   const [newOutfitStyle, setNewOutfitStyle] = useState(0);
   const [newTrait, setNewTrait] = useState("天马行空");
   const [toast, setToast] = useState("");
+  const [worldAction, setWorldAction] = useState<{ kind: "talk" | "food" | "play" | "rest"; token: number } | null>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem("sunny-life-save");
-    if (saved) try { const s = JSON.parse(saved); setPeople(s.people); setCoins(s.coins); setDay(s.day); setLog(s.log); } catch { /* fresh town */ }
+    const loadTimer = window.setTimeout(() => {
+      const saved = localStorage.getItem("sunny-life-save");
+      if (!saved) return;
+      try {
+        const parsed = JSON.parse(saved) as Partial<{ people: Person[]; coins: number; day: number; log: string[] }>;
+        if (Array.isArray(parsed.people) && parsed.people.length > 0) setPeople(parsed.people);
+        if (typeof parsed.coins === "number") setCoins(parsed.coins);
+        if (typeof parsed.day === "number") setDay(parsed.day);
+        if (Array.isArray(parsed.log)) setLog(parsed.log);
+      } catch {
+        /* Invalid or very old saves start with a fresh town. */
+      }
+    }, 0);
+    return () => window.clearTimeout(loadTimer);
   }, []);
   useEffect(() => { if (day > 1 || people.length > 3) localStorage.setItem("sunny-life-save", JSON.stringify({ people, coins, day, log })); }, [people, coins, day, log]);
 
   const person = people.find(p => p.id === selected) || people[0];
   const activeScene = scenes.find(s => s.id === scene)!;
   const weather = useMemo(() => ["晴朗 24°", "微风 22°", "彩虹 23°"][day % 3], [day]);
+  const worldResidents = useMemo(() => people.map(p => ({
+    id: p.id,
+    name: p.name,
+    skin: p.color,
+    hair: p.hair,
+    shirt: p.shirt || "#ef735f",
+    hairStyle: p.hairStyle || 0,
+    faceShape: p.faceShape || 0,
+    eyeStyle: p.eyeStyle || 0,
+    browStyle: p.browStyle || 0,
+    noseStyle: p.noseStyle || 0,
+    mouthStyle: p.mouthStyle || 0,
+    outfitStyle: p.outfitStyle || 0,
+    trait: p.trait,
+  })), [people]);
 
   const notify = (text: string) => { setToast(text); setTimeout(() => setToast(""), 2300); };
   const change = (updates: Partial<Person>) => setPeople(ps => ps.map(p => p.id === person.id ? { ...p, ...updates } : p));
@@ -83,10 +111,12 @@ export default function Home() {
     if (coins < map.cost) return notify("金币不够啦，去咖啡店打工吧！");
     setCoins(c => c - map.cost + (kind === "talk" ? 3 : 0));
     change({ mood: Math.min(100, person.mood + map.mood), friend: Math.min(100, person.friend + map.friend), energy: Math.max(0, Math.min(100, person.energy + map.energy)), food: kind === "food" ? Math.min(100, person.food + 25) : Math.max(0, person.food - 4) });
+    setWorldAction({ kind, token: Date.now() });
     setLog(l => [map.text, ...l].slice(0, 6)); notify(map.text);
   };
   const nextDay = () => {
     const text = `${person.name}${happenings[(day + person.id) % happenings.length]}`;
+    setWorldAction(null);
     setDay(d => d + 1); setCoins(c => c + 20);
     setPeople(ps => ps.map(p => ({ ...p, food: Math.max(12, p.food - 10), energy: Math.max(15, p.energy - 7) })));
     setLog(l => [text, ...l].slice(0, 6)); notify("新的一天，发生了新鲜事！");
@@ -95,7 +125,7 @@ export default function Home() {
     if (!name.trim()) return;
     const id = Date.now();
     const p: Person = { id, name: name.trim().slice(0, 8), color: newSkin, hair: newHair, shirt: newShirt, hairStyle: newHairStyle, faceShape: newFaceShape, eyeStyle: newEyeStyle, browStyle: newBrowStyle, noseStyle: newNoseStyle, mouthStyle: newMouthStyle, outfitStyle: newOutfitStyle, mood: 70, food: 65, energy: 80, friend: 20, trait: newTrait, dream: "发现属于自己的精彩生活" };
-    setPeople(ps => [...ps, p]); setSelected(id); setName(""); setShowCreate(false); setLog(l => [`新居民${p.name}搬进了晴天市！`, ...l]); notify(`欢迎${p.name}！`);
+    setPeople(ps => [...ps, p]); setSelected(id); setWorldAction(null); setName(""); setShowCreate(false); setLog(l => [`新居民${p.name}搬进了晴天市！`, ...l]); notify(`欢迎${p.name}！`);
   };
 
   return <main className="game-shell">
@@ -106,11 +136,11 @@ export default function Home() {
     </header>
 
     <section className="world">
-      <World3D scene={scene} selectedId={person.id} residents={people.map(p => ({ id:p.id, name:p.name, skin:p.color, hair:p.hair, shirt:p.shirt || "#ef735f", hairStyle:p.hairStyle || 0, faceShape:p.faceShape || 0, eyeStyle:p.eyeStyle || 0, browStyle:p.browStyle || 0, noseStyle:p.noseStyle || 0, mouthStyle:p.mouthStyle || 0, outfitStyle:p.outfitStyle || 0, trait:p.trait }))} />
+      <World3D scene={scene} selectedId={person.id} residents={worldResidents} actionCue={worldAction} />
       <div className="city-title"><span>{activeScene.icon}</span><div><b>{activeScene.name}</b><small>{activeScene.hint}</small></div></div>
       <div className="scene-dialogue"><Face person={person}/><div><b>{person.name}</b><span>{scene === "home" ? "今天会发生什么呢？" : scene === "plaza" ? "一起去广场玩吧！" : "这里的松饼闻起来好香！"}</span></div></div>
       <nav className="places" aria-label="地点">
-        {scenes.map(s => <button key={s.id} className={scene === s.id ? "active" : ""} onClick={() => setScene(s.id)}><span>{s.icon}</span>{s.name}</button>)}
+        {scenes.map(s => <button key={s.id} className={scene === s.id ? "active" : ""} onClick={() => { setScene(s.id); setWorldAction(null); }}><span>{s.icon}</span>{s.name}</button>)}
       </nav>
     </section>
 
@@ -121,7 +151,7 @@ export default function Home() {
         {[['心情','♥',person.mood,'pink'],['饱腹','●',person.food,'orange'],['精力','⚡',person.energy,'blue'],['友情','★',person.friend,'green']].map(([label, icon, value, cls]) => <div className="meter" key={String(label)}><span>{icon} {label}</span><div><i className={String(cls)} style={{width:`${value}%`}}/></div><b>{value}</b></div>)}
       </div>
       <div className="actions"><button onClick={() => act("talk")}><span>☻</span>聊聊天</button><button onClick={() => act("food")}><span>♨</span>吃东西<small>-15</small></button><button onClick={() => act("play")}><span>✦</span>去玩耍<small>-5</small></button><button onClick={() => act("rest")}><span>☾</span>休息</button></div>
-      <div className="resident-list"><b>城里居民 <em>{people.length}</em></b><div>{people.map(p => <button key={p.id} className={selected === p.id ? "chosen" : ""} onClick={() => setSelected(p.id)}><Face person={p}/><span>{p.name}</span></button>)}</div></div>
+      <div className="resident-list"><b>城里居民 <em>{people.length}</em></b><div>{people.map(p => <button key={p.id} className={selected === p.id ? "chosen" : ""} onClick={() => { setSelected(p.id); setWorldAction(null); }}><Face person={p}/><span>{p.name}</span></button>)}</div></div>
     </aside>
 
     <section className="story"><div className="story-head"><b>今日小报</b><span>生活每一刻都有故事</span></div>{log.slice(0,3).map((x,i) => <p key={i}><i>{i === 0 ? "新" : "•"}</i>{x}</p>)}</section>
