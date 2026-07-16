@@ -17,3 +17,28 @@
   border: 2px solid #fff;
   box-shadow: 0 6px 0 rgba(47, 59, 68, 0.12);
 }
+
+.face-shape-1 { border-radius: 50%; }
+.face-shape-2 { border-radius: 44% 44% 48% 48% / 38% 38% 56% 56%; }
+.brow { position:absolute; top:36%; width:18%; height:2px; background:#40352e; border-radius:4px; }
+.brow.left { left:23%; }
+.brow.right { right:23%; }
+.brow-1.left { transform:rotate(-10deg); }
+.brow-1.right { transform:rotate(10deg); }
+.brow-2.left { transform:rotate(10deg); }
+.brow-2.right { transform:rotate(-10deg); }
+.eye-1 { transform:scaleY(.35); }
+.eye-2 { transform:scaleY(.65) rotate(8deg); }
+.nose-1 { font-size:12px; }
+.nose-2 { transform:rotate(-18deg); }
+.mouth-1 { font-size:12px!important; transform:scaleX(1.3); }
+.mouth-2 { font-size:15px!important; }
+.feature-choice button { background:#eef5f3; border-radius:11px; color:#34475a; font-size:13px; font-weight:800; }
+.creator { width:min(720px,96vw); }
+.creator-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.creator .name-field { grid-column:1/-1; }
+
+@media (max-width: 850px) {
+  .creator-grid { grid-template-columns:1fr 1fr; }
+  .creator .name-field { grid-column:1/-1; }
+}

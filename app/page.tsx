@@ -6,7 +6,8 @@ import World3D from "./World3D";
 type Person = {
   id: number; name: string; color: string; hair: string; mood: number;
   food: number; energy: number; friend: number; trait: string; dream: string;
-  shirt?: string; hairStyle?: number;
+  shirt?: string; hairStyle?: number; faceShape?: number; eyeStyle?: number;
+  browStyle?: number; noseStyle?: number; mouthStyle?: number; outfitStyle?: number;
 };
 
 const starterPeople: Person[] = [
@@ -30,10 +31,11 @@ const happenings = [
 ];
 
 function Face({ person, big = false }: { person: Person; big?: boolean }) {
-  return <div className={`face ${big ? "face-big" : ""}`} style={{ background: person.color }}>
+  return <div className={`face face-shape-${person.faceShape || 0} ${big ? "face-big" : ""}`} style={{ background: person.color }}>
     <div className={`hair hair-${person.hairStyle || 0}`} style={{ background: person.hair }} />
-    <span className="eye left">●</span><span className="eye right">●</span>
-    <span className="nose">•</span><span className="mouth">⌣</span>
+    <span className={`brow brow-${person.browStyle || 0} left`}/><span className={`brow brow-${person.browStyle || 0} right`}/>
+    <span className={`eye eye-${person.eyeStyle || 0} left`}>●</span><span className={`eye eye-${person.eyeStyle || 0} right`}>●</span>
+    <span className={`nose nose-${person.noseStyle || 0}`}>•</span><span className={`mouth mouth-${person.mouthStyle || 0}`}>⌣</span>
   </div>;
 }
 
@@ -50,6 +52,12 @@ export default function Home() {
   const [newHair, setNewHair] = useState("#2b211d");
   const [newShirt, setNewShirt] = useState("#ef735f");
   const [newHairStyle, setNewHairStyle] = useState(0);
+  const [newFaceShape, setNewFaceShape] = useState(0);
+  const [newEyeStyle, setNewEyeStyle] = useState(0);
+  const [newBrowStyle, setNewBrowStyle] = useState(0);
+  const [newNoseStyle, setNewNoseStyle] = useState(0);
+  const [newMouthStyle, setNewMouthStyle] = useState(0);
+  const [newOutfitStyle, setNewOutfitStyle] = useState(0);
   const [newTrait, setNewTrait] = useState("天马行空");
   const [toast, setToast] = useState("");
 
@@ -86,7 +94,7 @@ export default function Home() {
   const createPerson = () => {
     if (!name.trim()) return;
     const id = Date.now();
-    const p: Person = { id, name: name.trim().slice(0, 8), color: newSkin, hair: newHair, shirt: newShirt, hairStyle: newHairStyle, mood: 70, food: 65, energy: 80, friend: 20, trait: newTrait, dream: "发现属于自己的精彩生活" };
+    const p: Person = { id, name: name.trim().slice(0, 8), color: newSkin, hair: newHair, shirt: newShirt, hairStyle: newHairStyle, faceShape: newFaceShape, eyeStyle: newEyeStyle, browStyle: newBrowStyle, noseStyle: newNoseStyle, mouthStyle: newMouthStyle, outfitStyle: newOutfitStyle, mood: 70, food: 65, energy: 80, friend: 20, trait: newTrait, dream: "发现属于自己的精彩生活" };
     setPeople(ps => [...ps, p]); setSelected(id); setName(""); setShowCreate(false); setLog(l => [`新居民${p.name}搬进了晴天市！`, ...l]); notify(`欢迎${p.name}！`);
   };
 
@@ -98,7 +106,7 @@ export default function Home() {
     </header>
 
     <section className="world">
-      <World3D scene={scene} skin={person.color} hair={person.hair} shirt={person.shirt || "#ef735f"} hairStyle={person.hairStyle || 0} />
+      <World3D scene={scene} selectedId={person.id} residents={people.map(p => ({ id:p.id, name:p.name, skin:p.color, hair:p.hair, shirt:p.shirt || "#ef735f", hairStyle:p.hairStyle || 0, faceShape:p.faceShape || 0, eyeStyle:p.eyeStyle || 0, browStyle:p.browStyle || 0, noseStyle:p.noseStyle || 0, mouthStyle:p.mouthStyle || 0, outfitStyle:p.outfitStyle || 0, trait:p.trait }))} />
       <div className="city-title"><span>{activeScene.icon}</span><div><b>{activeScene.name}</b><small>{activeScene.hint}</small></div></div>
       <div className="scene-dialogue"><Face person={person}/><div><b>{person.name}</b><span>{scene === "home" ? "今天会发生什么呢？" : scene === "plaza" ? "一起去广场玩吧！" : "这里的松饼闻起来好香！"}</span></div></div>
       <nav className="places" aria-label="地点">
@@ -118,6 +126,6 @@ export default function Home() {
 
     <section className="story"><div className="story-head"><b>今日小报</b><span>生活每一刻都有故事</span></div>{log.slice(0,3).map((x,i) => <p key={i}><i>{i === 0 ? "新" : "•"}</i>{x}</p>)}</section>
     {toast && <div className="toast">{toast}</div>}
-    {showCreate && <div className="modal-bg" onMouseDown={() => setShowCreate(false)}><div className="modal creator" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setShowCreate(false)}>×</button><div className="creator-head"><div className="avatar-preview"><Face big person={{...starterPeople[0],color:newSkin,hair:newHair,shirt:newShirt,hairStyle:newHairStyle}}/><span style={{background:newShirt}}/></div><div><small>居民设计室</small><h2>捏出你的居民</h2><p>每个选择都会出现在 3D 小城中。</p></div></div><div className="creator-grid"><label className="name-field">名字<input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && createPerson()} placeholder="输入名字" maxLength={8}/></label><div className="choice"><b>肤色</b><div>{["#ffd0a6","#efb18e","#c9845c","#8f573e","#5b382c"].map(c=><button aria-label={`选择肤色 ${c}`} className={newSkin===c?"picked":""} key={c} onClick={()=>setNewSkin(c)} style={{background:c}}/>)}</div></div><div className="choice"><b>发色</b><div>{["#2b211d","#70422d","#df6a78","#e1b84b","#315a72"].map(c=><button aria-label={`选择发色 ${c}`} className={newHair===c?"picked":""} key={c} onClick={()=>setNewHair(c)} style={{background:c}}/>)}</div></div><div className="choice hair-choice"><b>发型</b><div>{[0,1,2,3].map(n=><button aria-label={`选择发型 ${n+1}`} className={newHairStyle===n?"picked":""} key={n} onClick={()=>setNewHairStyle(n)}><i className={`mini-hair hair-${n}`} style={{background:newHair}}/></button>)}</div></div><div className="choice"><b>服装</b><div>{["#ef735f","#54a98e","#7b65d1","#e3ad3f","#4c79ad"].map(c=><button aria-label={`选择服装 ${c}`} className={newShirt===c?"picked":""} key={c} onClick={()=>setNewShirt(c)} style={{background:c}}/>)}</div></div><label className="trait-field">性格<select value={newTrait} onChange={e=>setNewTrait(e.target.value)}><option>天马行空</option><option>热情冒险</option><option>温柔细腻</option><option>冷静可靠</option><option>幽默淘气</option></select></label></div><button className="create" onClick={createPerson}>完成捏人 · 搬进晴天市</button></div></div>}
+    {showCreate && <div className="modal-bg" onMouseDown={() => setShowCreate(false)}><div className="modal creator" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={() => setShowCreate(false)}>×</button><div className="creator-head"><div className="avatar-preview"><Face big person={{...starterPeople[0],color:newSkin,hair:newHair,shirt:newShirt,hairStyle:newHairStyle,faceShape:newFaceShape,eyeStyle:newEyeStyle,browStyle:newBrowStyle,noseStyle:newNoseStyle,mouthStyle:newMouthStyle,outfitStyle:newOutfitStyle}}/><span style={{background:newShirt}}/></div><div><small>晴天市居民设计室</small><h2>创造独一无二的居民</h2><p>五官、发型与服装都会同步进入 3D 小城。</p></div></div><div className="creator-grid"><label className="name-field">名字<input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && createPerson()} placeholder="输入名字" maxLength={8}/></label><div className="choice"><b>肤色</b><div>{["#ffd0a6","#efb18e","#c9845c","#8f573e","#5b382c"].map(c=><button aria-label={`选择肤色 ${c}`} className={newSkin===c?"picked":""} key={c} onClick={()=>setNewSkin(c)} style={{background:c}}/>)}</div></div><div className="choice"><b>发色</b><div>{["#2b211d","#70422d","#df6a78","#e1b84b","#315a72"].map(c=><button aria-label={`选择发色 ${c}`} className={newHair===c?"picked":""} key={c} onClick={()=>setNewHair(c)} style={{background:c}}/>)}</div></div><div className="choice hair-choice"><b>发型</b><div>{[0,1,2,3].map(n=><button aria-label={`选择发型 ${n+1}`} className={newHairStyle===n?"picked":""} key={n} onClick={()=>setNewHairStyle(n)}><i className={`mini-hair hair-${n}`} style={{background:newHair}}/></button>)}</div></div><div className="choice feature-choice"><b>脸型</b><div>{["椭","圆","长"].map((s,n)=><button aria-label={`选择脸型 ${n+1}`} className={newFaceShape===n?"picked":""} key={s} onClick={()=>setNewFaceShape(n)}>{s}</button>)}</div></div><div className="choice feature-choice"><b>眼睛</b><div>{["●","—","⌒"].map((s,n)=><button aria-label={`选择眼睛 ${n+1}`} className={newEyeStyle===n?"picked":""} key={n} onClick={()=>setNewEyeStyle(n)}>{s}</button>)}</div></div><div className="choice feature-choice"><b>眉毛</b><div>{["一","⌃","⌄"].map((s,n)=><button aria-label={`选择眉毛 ${n+1}`} className={newBrowStyle===n?"picked":""} key={n} onClick={()=>setNewBrowStyle(n)}>{s}</button>)}</div></div><div className="choice feature-choice"><b>鼻子</b><div>{["•","△","L"].map((s,n)=><button aria-label={`选择鼻子 ${n+1}`} className={newNoseStyle===n?"picked":""} key={n} onClick={()=>setNewNoseStyle(n)}>{s}</button>)}</div></div><div className="choice feature-choice"><b>嘴巴</b><div>{["⌣","—","○"].map((s,n)=><button aria-label={`选择嘴巴 ${n+1}`} className={newMouthStyle===n?"picked":""} key={n} onClick={()=>setNewMouthStyle(n)}>{s}</button>)}</div></div><div className="choice"><b>服装颜色</b><div>{["#ef735f","#54a98e","#7b65d1","#e3ad3f","#4c79ad"].map(c=><button aria-label={`选择服装 ${c}`} className={newShirt===c?"picked":""} key={c} onClick={()=>setNewShirt(c)} style={{background:c}}/>)}</div></div><div className="choice feature-choice"><b>服装款式</b><div>{["T","衬","外"].map((s,n)=><button aria-label={`选择服装款式 ${n+1}`} className={newOutfitStyle===n?"picked":""} key={n} onClick={()=>setNewOutfitStyle(n)}>{s}</button>)}</div></div><label className="trait-field">性格<select value={newTrait} onChange={e=>setNewTrait(e.target.value)}><option>天马行空</option><option>热情冒险</option><option>温柔细腻</option><option>冷静可靠</option><option>幽默淘气</option></select></label></div><button className="create" onClick={createPerson}>完成设计 · 搬进晴天市</button></div></div>}
   </main>;
 }
