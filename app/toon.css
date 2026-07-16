@@ -1,0 +1,19 @@
+.world3d canvas {
+  image-rendering: auto;
+  filter: saturate(1.04) contrast(1.06);
+}
+
+.world::after {
+  background: linear-gradient(0deg, rgba(41, 66, 78, 0.08), transparent 22%);
+}
+
+.face {
+  background-image: none;
+  box-shadow: 0 3px 0 rgba(47, 59, 68, 0.18);
+}
+
+.resident-card,
+.scene-dialogue {
+  border: 2px solid #fff;
+  box-shadow: 0 6px 0 rgba(47, 59, 68, 0.12);
+}
