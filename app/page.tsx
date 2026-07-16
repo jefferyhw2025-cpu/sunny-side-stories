@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import World3D from "./World3D";
 
 type Person = {
   id: number; name: string; color: string; hair: string; mood: number;
@@ -93,12 +94,9 @@ export default function Home() {
     </header>
 
     <section className="world">
-      <div className="sky"><i className="cloud c1"/><i className="cloud c2"/></div>
+      <World3D scene={scene} skin={person.color} hair={person.hair} />
       <div className="city-title"><span>{activeScene.icon}</span><div><b>{activeScene.name}</b><small>{activeScene.hint}</small></div></div>
-      <div className={`building ${scene}`}>
-        <div className="roof"/><div className="windows"><i/><i/><i/></div><div className="door"/>
-        <div className="street-person"><Face person={person} big/><div className="speech">{scene === "home" ? "今天会发生什么呢？" : scene === "plaza" ? "一起玩吧！" : "闻起来好香呀！"}</div></div>
-      </div>
+      <div className="scene-dialogue"><Face person={person}/><div><b>{person.name}</b><span>{scene === "home" ? "今天会发生什么呢？" : scene === "plaza" ? "一起去广场玩吧！" : "这里的松饼闻起来好香！"}</span></div></div>
       <nav className="places" aria-label="地点">
         {scenes.map(s => <button key={s.id} className={scene === s.id ? "active" : ""} onClick={() => setScene(s.id)}><span>{s.icon}</span>{s.name}</button>)}
       </nav>
