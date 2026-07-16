@@ -3,11 +3,11 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
-type Props = { scene: string; skin: string; hair: string };
+type Props = { scene: string; skin: string; hair: string; shirt: string; hairStyle: number };
 
 const mat = (color: THREE.ColorRepresentation, rough = .62, metal = 0) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
 
-export default function World3D({ scene: sceneName, skin, hair }: Props) {
+export default function World3D({ scene: sceneName, skin, hair, shirt, hairStyle }: Props) {
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,9 +61,12 @@ export default function World3D({ scene: sceneName, skin, hair }: Props) {
     // Original resident, built from rounded 3D forms.
     const hero=new THREE.Group(); world.add(hero); hero.position.set(-2.3,0,1.75);
     const add=(g:THREE.BufferGeometry,m:THREE.Material,x:number,y:number,z:number)=>{const q=new THREE.Mesh(g,m);q.position.set(x,y,z);q.castShadow=true;hero.add(q);return q};
-    add(new THREE.CapsuleGeometry(.57,1.05,12,24),mat(sceneName==="plaza"?"#7b65d1":"#ef735f",.7),0,1.3,0);
+    add(new THREE.CapsuleGeometry(.57,1.05,12,24),mat(shirt,.7),0,1.3,0);
     const head=add(new THREE.SphereGeometry(.82,40,32),mat(skin,.72),0,2.65,0);head.scale.set(.91,1.08,.88);
-    add(new THREE.SphereGeometry(.87,36,24,0,Math.PI*2,0,Math.PI*.52),mat(hair,.86),0,2.92,0);
+    const hairCap=add(new THREE.SphereGeometry(.87,36,24,0,Math.PI*2,0,Math.PI*(hairStyle===2?.66:.52)),mat(hair,.86),0,2.92,0);
+    if(hairStyle===1){for(const x of [-.52,0,.52]){const lock=add(new THREE.SphereGeometry(.3,20,16),mat(hair,.86),x,3.24,.03);lock.scale.y=.78}}
+    if(hairStyle===2){for(const x of [-.72,.72]){const tail=add(new THREE.SphereGeometry(.33,20,16),mat(hair,.86),x,2.7,-.08);tail.scale.y=1.55}}
+    if(hairStyle===3){hairCap.scale.y=.72;const bun=add(new THREE.SphereGeometry(.34,24,18),mat(hair,.86),.35,3.47,-.05);bun.scale.y=1.1}
     for(const x of [-.27,.27]){add(new THREE.SphereGeometry(.075,18,12),mat("#272d35",.3),x,2.68,.72);add(new THREE.SphereGeometry(.023,10,8),mat("#ffffff",.2),x-.018,2.705,.78)}
     const mouth=add(new THREE.TorusGeometry(.12,.025,10,20,Math.PI),mat("#b4464b",.5),0,2.42,.77);mouth.rotation.z=Math.PI;
     for(const x of [-.27,.27]){const leg=add(new THREE.CapsuleGeometry(.12,.6,8,16),mat("#38536b"),x,0.35,0);leg.rotation.z=x*.08;add(new THREE.SphereGeometry(.19,20,12),mat("#f8f3e8"),x,.04,.14,.8)}
@@ -72,7 +75,7 @@ export default function World3D({ scene: sceneName, skin, hair }: Props) {
 
     // A second resident for social-life atmosphere.
     const friend=hero.clone(true); friend.position.set(2.75,0,1.2); friend.scale.set(.88,.88,.88); friend.rotation.y=-.25; world.add(friend);
-    const shirt=(friend.children[0] as THREE.Mesh); shirt.material=mat("#54a98e",.72);
+    const friendShirt=(friend.children[0] as THREE.Mesh); friendShirt.material=mat("#54a98e",.72);
 
     // Foreground props differ per destination.
     if(sceneName==="cafe"){const top=mesh(new THREE.CylinderGeometry(1.25,1.25,.16,40),mat("#a76b43"),2,.9,2.6);top.castShadow=true;box(.25,1.6,.25,"#6c4634",2,.05,2.6);sphere(.38,"#f3c36c",2,1.18,2.6,.32)}
@@ -82,7 +85,7 @@ export default function World3D({ scene: sceneName, skin, hair }: Props) {
     const render=()=>{const t=clock.getElapsedTime();hero.position.y=Math.sin(t*2)*.045;hero.rotation.y=Math.sin(t*.7)*.055;friend.position.y=Math.sin(t*2+1)*.04;armR.rotation.z=.95+Math.sin(t*3)*.18;camera.position.x=8.5+Math.sin(t*.18)*.28;camera.lookAt(0,2.35,0);renderer.render(world,camera);raf=requestAnimationFrame(render)};render();
     const resize=()=>{if(!el.clientWidth)return;camera.aspect=el.clientWidth/el.clientHeight;camera.updateProjectionMatrix();renderer.setSize(el.clientWidth,el.clientHeight)};new ResizeObserver(resize).observe(el);
     return()=>{cancelAnimationFrame(raf);renderer.dispose();el.replaceChildren()};
-  }, [sceneName, skin, hair]);
+  }, [sceneName, skin, hair, shirt, hairStyle]);
 
   return <div className="world3d" ref={host} aria-label="立体小城生活场景" />;
 }
