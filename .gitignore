@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/.pnpm-store/
 /.pnp
 .pnp.*
 .yarn/*
@@ -37,6 +38,10 @@ yarn-error.log*
 # typescript
 next-env.d.ts
 /dist/
+/github-dist/
 /.wrangler/
 /outputs/
 /work/
+
+# Local release archives are not part of the public source tree.
+sunny-side-site*.tar.gz
