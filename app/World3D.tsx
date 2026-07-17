@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { OutlineEffect } from "three/addons/effects/OutlineEffect.js";
 import {
   createCharacter,
   updateCharacter,
@@ -113,7 +112,7 @@ const SUPPORTING_RESIDENTS: CharacterProfile[] = [
 const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   home: {
     target: new THREE.Vector3(-9, 1.35, 4.7),
-    camera: new THREE.Vector3(2.8, 9.3, 18.2),
+    camera: new THREE.Vector3(5, 10.4, 21.6),
     points: [
       new THREE.Vector3(-9.8, 0, 5.4),
       new THREE.Vector3(-7.3, 0, 5.7),
@@ -137,7 +136,7 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   },
   plaza: {
     target: new THREE.Vector3(-7.7, 1.15, -4.5),
-    camera: new THREE.Vector3(5.8, 10.4, 9.5),
+    camera: new THREE.Vector3(8.5, 11.7, 12.6),
     points: [
       new THREE.Vector3(-10.9, 0, -5.2),
       new THREE.Vector3(-4.5, 0, -5.2),
@@ -161,7 +160,7 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   },
   cafe: {
     target: new THREE.Vector3(7.5, 1.45, 1.1),
-    camera: new THREE.Vector3(20.1, 9.1, 15.6),
+    camera: new THREE.Vector3(23.1, 10.5, 18.4),
     points: [
       new THREE.Vector3(7.9, 0, 1.2),
       new THREE.Vector3(5.2, 0, -0.1),
@@ -281,8 +280,8 @@ function createNameTag(name: string): THREE.Sprite {
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
   sprite.name = "selected-resident-name";
-  sprite.position.set(0, 3.8, 0);
-  sprite.scale.set(2.75, 0.86, 1);
+  sprite.position.set(0, 3.68, 0);
+  sprite.scale.set(2.48, 0.76, 1);
   sprite.renderOrder = 20;
   return sprite;
 }
@@ -295,7 +294,7 @@ function createSelectionRing(): THREE.Mesh {
     depthWrite: false,
     side: THREE.DoubleSide,
   });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.67, 0.86, 32), material);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.8, 32), material);
   ring.name = "selected-resident-ring";
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = 0.035;
@@ -329,22 +328,83 @@ function createAtmosphere(center: THREE.Vector3): THREE.Group {
   return group;
 }
 
+function createSkyTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, "#75bce9");
+    gradient.addColorStop(0.48, "#a9daf0");
+    gradient.addColorStop(0.78, "#d8eceb");
+    gradient.addColorStop(1, "#f4e9d4");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
 function disposeWorld(scene: THREE.Scene): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+
+  if (scene.background instanceof THREE.Texture) textures.add(scene.background);
+  if (scene.environment instanceof THREE.Texture) textures.add(scene.environment);
+
   scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite || object instanceof THREE.Line)) return;
-    object.geometry?.dispose();
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    for (const material of materials) {
-      if (!material) continue;
-      const withMap = material as THREE.Material & { map?: THREE.Texture | null };
-      withMap.map?.dispose();
-      material.dispose();
+    if (object.geometry) geometries.add(object.geometry);
+    const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of objectMaterials) {
+      if (material) materials.add(material);
     }
   });
+
+  for (const material of materials) {
+    if (material.userData.shared === true) continue;
+    for (const value of Object.values(material)) {
+      if (value instanceof THREE.Texture) textures.add(value);
+    }
+    material.dispose();
+  }
+  for (const geometry of geometries) geometry.dispose();
+  for (const texture of textures) texture.dispose();
 }
 
 export default function World3D({ scene, selectedId, residents, actionCue }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const residentsRef = useRef(residents);
+  const directorRef = useRef<ReturnType<typeof createWorldDirector> | null>(null);
+  const residentAppearanceKey = residents
+    .map((resident) =>
+      [
+        resident.id,
+        resident.name,
+        resident.skin,
+        resident.hair,
+        resident.shirt,
+        resident.hairStyle,
+        resident.faceShape,
+        resident.eyeStyle,
+        resident.browStyle,
+        resident.noseStyle,
+        resident.mouthStyle,
+        resident.outfitStyle,
+        resident.trait,
+      ].join("~"),
+    )
+    .join("|");
+
+  useEffect(() => {
+    residentsRef.current = residents;
+  }, [residents]);
 
   useEffect(() => {
     const element = host.current;
@@ -352,15 +412,15 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
 
     const location = sceneName(scene);
     const composition = SCENE_COMPOSITIONS[location];
-    const profiles = chooseResidents(residents, selectedId);
+    const profiles = chooseResidents(residentsRef.current, selectedId);
     const world = new THREE.Scene();
     world.name = "Sunny Side Stories";
-    world.background = new THREE.Color("#91dcf4");
-    world.fog = new THREE.Fog("#c7edf2", 26, 72);
+    world.background = createSkyTexture();
+    world.fog = new THREE.Fog("#d5e8e6", 31, 82);
 
     const width = Math.max(1, element.clientWidth);
     const height = Math.max(1, element.clientHeight);
-    const camera = new THREE.PerspectiveCamera(37, width / height, 0.1, 140);
+    const camera = new THREE.PerspectiveCamera(34, width / height, 0.1, 140);
     camera.position.copy(composition.camera);
     camera.lookAt(composition.target);
 
@@ -381,19 +441,12 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.16;
+    renderer.toneMappingExposure = 1.02;
     element.replaceChildren(renderer.domElement);
 
-    const outline = new OutlineEffect(renderer, {
-      defaultThickness: 0.0022,
-      defaultColor: [0.12, 0.16, 0.17],
-      defaultAlpha: 0.32,
-      defaultKeepAlive: false,
-    });
-
-    const skyLight = new THREE.HemisphereLight("#fffdf1", "#72a96c", 2.35);
+    const skyLight = new THREE.HemisphereLight("#fffaf0", "#6f9273", 1.05);
     world.add(skyLight);
-    const sun = new THREE.DirectionalLight("#fff3d1", 3.45);
+    const sun = new THREE.DirectionalLight("#fff1d2", 2.4);
     sun.position.copy(composition.target).add(new THREE.Vector3(-17, 26, 15));
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -403,11 +456,11 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     sun.shadow.camera.right = 20;
     sun.shadow.camera.top = 20;
     sun.shadow.camera.bottom = -20;
-    sun.shadow.bias = -0.00028;
-    sun.shadow.normalBias = 0.028;
+    sun.shadow.bias = -0.00018;
+    sun.shadow.normalBias = 0.012;
     sun.target.position.copy(composition.target);
     world.add(sun, sun.target);
-    const fill = new THREE.DirectionalLight("#bce9ff", 0.72);
+    const fill = new THREE.DirectionalLight("#badff0", 0.24);
     fill.position.copy(composition.target).add(new THREE.Vector3(16, 9, -12));
     world.add(fill);
 
@@ -419,13 +472,21 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       const character = createCharacter(prepareProfile(profile));
       const start = composition.starts[index % composition.starts.length];
       character.group.position.copy(start);
-      character.group.scale.setScalar(index === 0 ? 1.02 : 0.92 + (index % 3) * 0.035);
+      character.group.scale.setScalar(index === 0 ? 0.58 : 0.545 + (index % 3) * 0.008);
       character.group.rotation.y = index % 2 === 0 ? 0.18 : -0.28;
       character.group.userData.isSelected = index === 0;
       character.group.traverse((object) => {
         if (object instanceof THREE.Mesh) {
-          object.castShadow = true;
-          object.receiveShadow = true;
+          if (!object.geometry.boundingSphere) object.geometry.computeBoundingSphere();
+          const radius = object.geometry.boundingSphere?.radius ?? 0;
+          const material = Array.isArray(object.material) ? object.material[0] : object.material;
+          const isSurfaceDetail =
+            object.geometry instanceof THREE.CircleGeometry ||
+            object.geometry instanceof THREE.TorusGeometry ||
+            object.geometry instanceof THREE.PlaneGeometry;
+          const isOpaque = !material?.transparent || material.opacity >= 0.96;
+          object.castShadow = radius >= 0.16 && !isSurfaceDetail && isOpaque;
+          object.receiveShadow = radius >= 0.22 && !isSurfaceDetail;
         }
       });
       world.add(character.group);
@@ -438,22 +499,14 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     const nameTag = createNameTag(selected.profile.name);
     selected.group.add(selectionRing, nameTag);
 
-    const selectedCueState: CharacterState =
-      actionCue?.kind === "talk"
-        ? "talk"
-        : actionCue?.kind === "food"
-          ? "eat"
-          : actionCue?.kind === "rest"
-            ? "sit"
-            : "happy";
     const definitions: ResidentDefinition[] = characters.map((character, index) => ({
       id: String(character.profile.id),
       group: character.group,
-      initialState: index === 0 ? selectedCueState : index % 3 === 0 ? "walk" : "idle",
+      initialState: index === 0 ? "idle" : index % 3 === 0 ? "walk" : "idle",
       targetPoints: composition.points,
-      walkSpeed: 0.72 + (index % 3) * 0.07,
-      runSpeed: 1.52 + (index % 2) * 0.12,
-      radius: 0.52,
+      walkSpeed: 0.58 + (index % 3) * 0.05,
+      runSpeed: 1.15 + (index % 2) * 0.1,
+      radius: 0.34,
       turnSpeed: 7.5,
       acceleration: 7,
       durations: {
@@ -472,10 +525,10 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       targetPoints: composition.points as PointLike[],
       bounds: { minX: -19, maxX: 19, minZ: -16.5, maxZ: 16.5, y: 0 },
       obstacles: TOWN_OBSTACLES,
-      arrivalDistance: 0.18,
-      avoidancePadding: 0.3,
+      arrivalDistance: 0.14,
+      avoidancePadding: 0.22,
       avoidanceStrength: 1.7,
-      conversationDistance: 2.2,
+      conversationDistance: 1.55,
       conversationRate: 0.3,
       conversationCooldown: 5,
       camera,
@@ -483,29 +536,19 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
         target: composition.target,
         positionDamping: 2,
         targetDamping: 4,
-        minFov: 32,
-        maxFov: 44,
+        minFov: 30,
+        maxFov: 39,
       },
       applyAnimation(group, state, elapsed, delta) {
         const character = characterByGroup.get(group);
         if (character) updateCharacter(character, state as CharacterState, elapsed, delta);
       },
     });
-    director.camera?.cut(composition.camera, composition.target, 37);
+    directorRef.current = director;
+    director.camera?.cut(composition.camera, composition.target, 34);
 
-    if (actionCue?.kind === "talk" && director.residents[0] && director.residents[1]) {
-      director.startConversation(director.residents[0], director.residents[1], 6.5);
-    } else if (director.residents[1] && director.residents[2]) {
+    if (director.residents[1] && director.residents[2]) {
       director.startConversation(director.residents[1], director.residents[2], 6.5);
-    }
-    if (actionCue?.kind === "food" && director.residents[0]) {
-      director.setState(director.residents[0], "eat", { duration: 5.8, reason: "player-action" });
-    }
-    if (actionCue?.kind === "rest" && director.residents[0]) {
-      director.setState(director.residents[0], "sit", { duration: 6.4, reason: "player-action" });
-    }
-    if (actionCue?.kind === "play" && director.residents[0]) {
-      director.setState(director.residents[0], "happy", { duration: 4.2, reason: "player-action" });
     }
     if (director.residents[3]) director.setState(director.residents[3], "eat", { duration: 5.6 });
     if (director.residents[4]) director.setState(director.residents[4], "sit", { duration: 6.2 });
@@ -517,6 +560,8 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     world.add(atmosphere);
 
     const clock = new THREE.Clock();
+    const cameraDrift = new THREE.Vector3();
+    const cameraPosition = new THREE.Vector3();
     let frameId = 0;
     let stopped = false;
     const render = () => {
@@ -525,21 +570,21 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       const elapsed = clock.elapsedTime;
       town.update(elapsed);
 
-      const cameraDrift = new THREE.Vector3(
+      cameraDrift.set(
         Math.sin(elapsed * 0.12) * 0.32,
         Math.sin(elapsed * 0.18 + 0.8) * 0.12,
         Math.cos(elapsed * 0.1) * 0.22,
       );
       director.camera?.moveTo(
-        composition.camera.clone().add(cameraDrift),
+        cameraPosition.copy(composition.camera).add(cameraDrift),
         composition.target,
-        { positionDamping: 1.5, targetDamping: 4.2, fov: 37 },
+        { positionDamping: 1.5, targetDamping: 4.2, fov: 34 },
       );
       director.update(delta, elapsed);
 
       const pulse = 1 + Math.sin(elapsed * 3.2) * 0.09;
       selectionRing.scale.setScalar(pulse);
-      nameTag.position.y = 3.78 + Math.sin(elapsed * 2.25) * 0.055;
+      nameTag.position.y = 3.68 + Math.sin(elapsed * 2.25) * 0.045;
       atmosphere.children.forEach((petal, index) => {
         const phase = Number(petal.userData.phase) || index;
         const baseY = Number(petal.userData.baseY) || 1;
@@ -548,7 +593,7 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
         petal.rotation.z = elapsed * 0.35 + phase * 0.6;
       });
 
-      outline.render(world, camera);
+      renderer.render(world, camera);
       frameId = requestAnimationFrame(render);
     };
     render();
@@ -559,7 +604,7 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       camera.aspect = nextWidth / nextHeight;
       camera.updateProjectionMatrix();
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      outline.setSize(nextWidth, nextHeight);
+      renderer.setSize(nextWidth, nextHeight, false);
     });
     resizeObserver.observe(element);
 
@@ -568,12 +613,29 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       clock.stop();
+      if (directorRef.current === director) directorRef.current = null;
       disposeWorld(world);
       renderer.dispose();
       renderer.forceContextLoss();
       element.replaceChildren();
     };
-  }, [scene, selectedId, residents, actionCue]);
+  }, [scene, selectedId, residentAppearanceKey]);
+
+  useEffect(() => {
+    const director = directorRef.current;
+    const selected = director?.residents[0];
+    if (!director || !selected || !actionCue) return;
+
+    if (actionCue.kind === "talk" && director.residents[1]) {
+      director.startConversation(selected, director.residents[1], 6.5);
+    } else if (actionCue.kind === "food") {
+      director.setState(selected, "eat", { duration: 5.8, reason: "player-action" });
+    } else if (actionCue.kind === "rest") {
+      director.setState(selected, "sit", { duration: 6.4, reason: "player-action" });
+    } else if (actionCue.kind === "play") {
+      director.setState(selected, "happy", { duration: 4.2, reason: "player-action" });
+    }
+  }, [actionCue, residentAppearanceKey, scene, selectedId]);
 
   return <div className="world3d" ref={host} aria-label="晴天市实时三维生活场景" />;
 }
