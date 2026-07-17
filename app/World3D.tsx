@@ -22,6 +22,9 @@ type Props = {
   selectedId: string | number;
   residents: CharacterProfile[];
   actionCue?: { kind: "talk" | "food" | "play" | "rest"; token: number } | null;
+  timeOfDay?: "day" | "sunset" | "night";
+  weatherMode?: "clear" | "rain" | "snow";
+  cinematicView?: boolean;
 };
 
 type SceneComposition = {
@@ -30,6 +33,17 @@ type SceneComposition = {
   points: THREE.Vector3[];
   starts: THREE.Vector3[];
 };
+
+type TimeOfDay = "day" | "sunset" | "night";
+type WeatherMode = "clear" | "rain" | "snow";
+type CameraFocus = { kind: "talk" | "food" | "play" | "rest"; until: number };
+type WorldRuntime = {
+  director: ReturnType<typeof createWorldDirector>;
+  characters: Character[];
+  clock: THREE.Clock;
+  focus: CameraFocus | null;
+};
+type WeatherLayer = { group: THREE.Object3D; update: (time: number) => void };
 
 const SUPPORTING_RESIDENTS: CharacterProfile[] = [
   {
@@ -111,12 +125,12 @@ const SUPPORTING_RESIDENTS: CharacterProfile[] = [
 
 const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   home: {
-    target: new THREE.Vector3(-9, 1.35, 4.7),
-    camera: new THREE.Vector3(5, 10.4, 21.6),
+    target: new THREE.Vector3(-9, 2.5, 4.7),
+    camera: new THREE.Vector3(4.2, 10.6, 22),
     points: [
-      new THREE.Vector3(-9.8, 0, 5.4),
-      new THREE.Vector3(-7.3, 0, 5.7),
-      new THREE.Vector3(-4.2, 0, 5.7),
+      new THREE.Vector3(-5, 0, 11.3),
+      new THREE.Vector3(-3.8, 0, 10.3),
+      new THREE.Vector3(-2.6, 0, 9.3),
       new THREE.Vector3(-3.1, 0, 2.8),
       new THREE.Vector3(-7.8, 0, 0.5),
       new THREE.Vector3(-11.8, 0, 7.6),
@@ -124,9 +138,9 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(-2.8, 0, 8.2),
     ],
     starts: [
-      new THREE.Vector3(-9.7, 0, 5.45),
-      new THREE.Vector3(-7.5, 0, 5.65),
-      new THREE.Vector3(-4.7, 0, 5.65),
+      new THREE.Vector3(-5, 0, 11.3),
+      new THREE.Vector3(-3.8, 0, 10.3),
+      new THREE.Vector3(-2.6, 0, 9.3),
       new THREE.Vector3(-3.1, 0, 2.65),
       new THREE.Vector3(-7.6, 0, 0.55),
       new THREE.Vector3(-11.5, 0, 7.5),
@@ -135,8 +149,8 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
     ],
   },
   plaza: {
-    target: new THREE.Vector3(-7.7, 1.15, -4.5),
-    camera: new THREE.Vector3(8.5, 11.7, 12.6),
+    target: new THREE.Vector3(-7.7, 1.55, -4.5),
+    camera: new THREE.Vector3(6.1, 10.1, 10.1),
     points: [
       new THREE.Vector3(-10.9, 0, -5.2),
       new THREE.Vector3(-4.5, 0, -5.2),
@@ -159,8 +173,8 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
     ],
   },
   cafe: {
-    target: new THREE.Vector3(7.5, 1.45, 1.1),
-    camera: new THREE.Vector3(23.1, 10.5, 18.4),
+    target: new THREE.Vector3(7.5, 1.75, 1.1),
+    camera: new THREE.Vector3(20.8, 9.3, 15.9),
     points: [
       new THREE.Vector3(7.9, 0, 1.2),
       new THREE.Vector3(5.2, 0, -0.1),
@@ -182,6 +196,66 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(12, 0, 1.2),
     ],
   },
+  shop: {
+    target: new THREE.Vector3(0, 1.55, -0.7),
+    camera: new THREE.Vector3(8.8, 6.8, 11.8),
+    points: [
+      new THREE.Vector3(-1.6, 0, 2.4),
+      new THREE.Vector3(0, 0, 2.8),
+      new THREE.Vector3(2, 0, -1.6),
+      new THREE.Vector3(2.2, 0, 1.4),
+      new THREE.Vector3(-2.4, 0, -1.2),
+      new THREE.Vector3(0.2, 0, 0.6),
+    ],
+    starts: [
+      new THREE.Vector3(-1.6, 0, 2.4),
+      new THREE.Vector3(0, 0, 2.8),
+      new THREE.Vector3(2, 0, -1.6),
+      new THREE.Vector3(2.2, 0, 1.4),
+      new THREE.Vector3(-2.4, 0, -1.2),
+      new THREE.Vector3(0.2, 0, 0.6),
+    ],
+  },
+  interior: {
+    target: new THREE.Vector3(0, 1.5, -0.6),
+    camera: new THREE.Vector3(8.2, 6.5, 11.2),
+    points: [
+      new THREE.Vector3(-1.2, 0, 1.7),
+      new THREE.Vector3(1, 0, 2.5),
+      new THREE.Vector3(0, 0, -1.2),
+      new THREE.Vector3(2.3, 0, 0.5),
+      new THREE.Vector3(-2.5, 0, -0.4),
+      new THREE.Vector3(0.6, 0, 0.8),
+    ],
+    starts: [
+      new THREE.Vector3(-1.2, 0, 1.7),
+      new THREE.Vector3(1, 0, 2.5),
+      new THREE.Vector3(0, 0, -1.2),
+      new THREE.Vector3(2.3, 0, 0.5),
+      new THREE.Vector3(-2.5, 0, -0.4),
+      new THREE.Vector3(0.6, 0, 0.8),
+    ],
+  },
+};
+
+const CINEMATIC_VIEWS: Partial<
+  Record<TownSceneName, { target: THREE.Vector3; camera: THREE.Vector3; fov: number }>
+> = {
+  home: {
+    target: new THREE.Vector3(-5.2, 2.8, 8.3),
+    camera: new THREE.Vector3(6.8, 8.8, 22.5),
+    fov: 34,
+  },
+  plaza: {
+    target: new THREE.Vector3(-7.7, 2.5, -4.5),
+    camera: new THREE.Vector3(5, 7.2, 6.5),
+    fov: 34,
+  },
+  cafe: {
+    target: new THREE.Vector3(7.9, 3, -1.4),
+    camera: new THREE.Vector3(8.5, 11, 29),
+    fov: 35,
+  },
 };
 
 const TOWN_OBSTACLES: CircularObstacle[] = [
@@ -199,7 +273,9 @@ const TOWN_OBSTACLES: CircularObstacle[] = [
 ];
 
 function sceneName(value: string): TownSceneName {
-  return value === "plaza" || value === "cafe" ? value : "home";
+  return value === "plaza" || value === "cafe" || value === "shop" || value === "interior"
+    ? value
+    : "home";
 }
 
 function chooseResidents(
@@ -221,11 +297,6 @@ function chooseResidents(
   return ordered.slice(0, 6);
 }
 
-function semanticStyle(value: string | number, options: readonly string[]): string | number {
-  const numeric = typeof value === "number" ? value : /^\d+$/.test(value) ? Number(value) : NaN;
-  return Number.isInteger(numeric) && options[numeric] ? options[numeric] : value;
-}
-
 function prepareProfile(profile: CharacterProfile): CharacterProfile {
   const traitKeywords: Record<string, string> = {
     天马行空: "creative music",
@@ -240,12 +311,6 @@ function prepareProfile(profile: CharacterProfile): CharacterProfile {
   };
   return {
     ...profile,
-    faceShape: semanticStyle(profile.faceShape, ["oval", "round", "long"]),
-    eyeStyle: semanticStyle(profile.eyeStyle, ["wide", "closed", "sparkle"]),
-    browStyle: semanticStyle(profile.browStyle, ["soft", "arch", "bold"]),
-    noseStyle: semanticStyle(profile.noseStyle, ["button", "point", "line"]),
-    mouthStyle: semanticStyle(profile.mouthStyle, ["smile", "neutral", "big grin"]),
-    outfitStyle: semanticStyle(profile.outfitStyle, ["basic", "overall", "jacket"]),
     trait: `${profile.trait} ${traitKeywords[profile.trait] ?? ""}`.trim(),
   };
 }
@@ -328,19 +393,32 @@ function createAtmosphere(center: THREE.Vector3): THREE.Group {
   return group;
 }
 
-function createSkyTexture(): THREE.CanvasTexture {
+function createSkyTexture(timeOfDay: TimeOfDay): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 32;
   canvas.height = 512;
   const context = canvas.getContext("2d");
   if (context) {
+    const palette = timeOfDay === "night"
+      ? ["#101a38", "#223d67", "#5d7392", "#c3a99d"]
+      : timeOfDay === "sunset"
+        ? ["#667fc4", "#e9a37f", "#f6c68c", "#f7e0ba"]
+        : ["#3f9fe8", "#78c7f2", "#bce7f7", "#edf7ef"];
     const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
-    gradient.addColorStop(0, "#75bce9");
-    gradient.addColorStop(0.48, "#a9daf0");
-    gradient.addColorStop(0.78, "#d8eceb");
-    gradient.addColorStop(1, "#f4e9d4");
+    gradient.addColorStop(0, palette[0]);
+    gradient.addColorStop(0.48, palette[1]);
+    gradient.addColorStop(0.78, palette[2]);
+    gradient.addColorStop(1, palette[3]);
     context.fillStyle = gradient;
     context.fillRect(0, 0, canvas.width, canvas.height);
+    if (timeOfDay === "night") {
+      context.fillStyle = "rgba(255,255,220,.82)";
+      for (let index = 0; index < 34; index += 1) {
+        const x = (index * 17) % canvas.width;
+        const y = 18 + ((index * 43) % 210);
+        context.fillRect(x, y, index % 5 === 0 ? 2 : 1, index % 5 === 0 ? 2 : 1);
+      }
+    }
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -348,6 +426,83 @@ function createSkyTexture(): THREE.CanvasTexture {
   texture.magFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
   return texture;
+}
+
+function createWeatherLayer(
+  mode: WeatherMode,
+  center: THREE.Vector3,
+): WeatherLayer | null {
+  if (mode === "clear") return null;
+
+  if (mode === "rain") {
+    const count = 320;
+    const positions = new Float32Array(count * 6);
+    const geometry = new THREE.BufferGeometry();
+    const attribute = new THREE.BufferAttribute(positions, 3);
+    geometry.setAttribute("position", attribute);
+    const material = new THREE.LineBasicMaterial({
+      color: "#b8e3ff",
+      transparent: true,
+      opacity: 0.48,
+      depthWrite: false,
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.name = "rain-layer";
+    lines.frustumCulled = false;
+    lines.renderOrder = 12;
+    const update = (time: number) => {
+      for (let index = 0; index < count; index += 1) {
+        const angle = index * 2.399963;
+        const radius = 1.6 + ((index * 67) % 100) * 0.125;
+        const x = center.x + Math.cos(angle) * radius;
+        const z = center.z + Math.sin(angle) * radius;
+        const speed = 5.8 + (index % 11) * 0.22;
+        const y = 8.8 - ((time * speed + index * 0.37) % 10.2);
+        const offset = index * 6;
+        positions[offset] = x;
+        positions[offset + 1] = y;
+        positions[offset + 2] = z;
+        positions[offset + 3] = x - 0.08;
+        positions[offset + 4] = y - 0.62;
+        positions[offset + 5] = z + 0.05;
+      }
+      attribute.needsUpdate = true;
+    };
+    update(0);
+    return { group: lines, update };
+  }
+
+  const count = 420;
+  const positions = new Float32Array(count * 3);
+  const geometry = new THREE.BufferGeometry();
+  const attribute = new THREE.BufferAttribute(positions, 3);
+  geometry.setAttribute("position", attribute);
+  const material = new THREE.PointsMaterial({
+    color: "#ffffff",
+    size: 0.105,
+    transparent: true,
+    opacity: 0.84,
+    depthWrite: false,
+    sizeAttenuation: true,
+  });
+  const snow = new THREE.Points(geometry, material);
+  snow.name = "snow-layer";
+  snow.frustumCulled = false;
+  snow.renderOrder = 12;
+  const update = (time: number) => {
+    for (let index = 0; index < count; index += 1) {
+      const angle = index * 2.399963;
+      const radius = 1.2 + ((index * 71) % 120) * 0.105;
+      const speed = 0.48 + (index % 9) * 0.035;
+      const offset = index * 3;
+      positions[offset] = center.x + Math.cos(angle) * radius + Math.sin(time * 0.7 + index) * 0.22;
+      positions[offset + 1] = 7.8 - ((time * speed + index * 0.19) % 8.2);
+      positions[offset + 2] = center.z + Math.sin(angle) * radius + Math.cos(time * 0.45 + index) * 0.18;
+    }
+    attribute.needsUpdate = true;
+  };
+  update(0);
+  return { group: snow, update };
 }
 
 function disposeWorld(scene: THREE.Scene): void {
@@ -360,7 +515,7 @@ function disposeWorld(scene: THREE.Scene): void {
 
   scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite || object instanceof THREE.Line)) return;
-    if (object.geometry) geometries.add(object.geometry);
+    if (object.geometry && !object.geometry.userData.sharedCharacterAsset) geometries.add(object.geometry);
     const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of objectMaterials) {
       if (material) materials.add(material);
@@ -368,20 +523,30 @@ function disposeWorld(scene: THREE.Scene): void {
   });
 
   for (const material of materials) {
-    if (material.userData.shared === true) continue;
+    if (material.userData.shared === true || material.userData.sharedCharacterAsset === true) continue;
     for (const value of Object.values(material)) {
       if (value instanceof THREE.Texture) textures.add(value);
     }
     material.dispose();
   }
   for (const geometry of geometries) geometry.dispose();
-  for (const texture of textures) texture.dispose();
+  for (const texture of textures) {
+    if (texture.userData.shared !== true && texture.userData.sharedCharacterAsset !== true) texture.dispose();
+  }
 }
 
-export default function World3D({ scene, selectedId, residents, actionCue }: Props) {
+export default function World3D({
+  scene,
+  selectedId,
+  residents,
+  actionCue,
+  timeOfDay = "day",
+  weatherMode = "clear",
+  cinematicView = false,
+}: Props) {
   const host = useRef<HTMLDivElement>(null);
   const residentsRef = useRef(residents);
-  const directorRef = useRef<ReturnType<typeof createWorldDirector> | null>(null);
+  const runtimeRef = useRef<WorldRuntime | null>(null);
   const residentAppearanceKey = residents
     .map((resident) =>
       [
@@ -411,18 +576,28 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     if (!element) return;
 
     const location = sceneName(scene);
+    const indoor = location === "shop" || location === "interior";
     const composition = SCENE_COMPOSITIONS[location];
-    const profiles = chooseResidents(residentsRef.current, selectedId);
+    const cinematic = !indoor && cinematicView ? CINEMATIC_VIEWS[location] : undefined;
+    const viewCamera = cinematic?.camera ?? composition.camera;
+    const viewTarget = cinematic?.target ?? composition.target;
+    const viewFov = cinematic?.fov ?? (indoor ? 34 : 33);
+    const profiles = chooseResidents(residentsRef.current, selectedId).slice(0, 4);
     const world = new THREE.Scene();
     world.name = "Sunny Side Stories";
-    world.background = createSkyTexture();
-    world.fog = new THREE.Fog("#d5e8e6", 31, 82);
+    world.background = createSkyTexture(timeOfDay);
+    const fogColor = timeOfDay === "night" ? "#243653" : timeOfDay === "sunset" ? "#ddb8a8" : "#c9e9f3";
+    world.fog = new THREE.Fog(
+      fogColor,
+      indoor ? 18 : timeOfDay === "night" ? 31 : 42,
+      indoor ? 48 : timeOfDay === "night" ? 82 : 110,
+    );
 
     const width = Math.max(1, element.clientWidth);
     const height = Math.max(1, element.clientHeight);
-    const camera = new THREE.PerspectiveCamera(34, width / height, 0.1, 140);
-    camera.position.copy(composition.camera);
-    camera.lookAt(composition.target);
+    const camera = new THREE.PerspectiveCamera(viewFov, width / height, 0.1, 140);
+    camera.position.copy(viewCamera);
+    camera.lookAt(viewTarget);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -441,28 +616,54 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.02;
+    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 0.96 : 0.8) : timeOfDay === "sunset" ? 0.98 : 1.06;
+    renderer.domElement.style.imageRendering = "auto";
     element.replaceChildren(renderer.domElement);
 
-    const skyLight = new THREE.HemisphereLight("#fffaf0", "#6f9273", 1.05);
+    const skyLight = new THREE.HemisphereLight(
+      timeOfDay === "night" ? "#7894c8" : timeOfDay === "sunset" ? "#ffe1c4" : "#e6f6ff",
+      timeOfDay === "night" ? "#18243d" : timeOfDay === "sunset" ? "#806a72" : "#a8bb91",
+      indoor ? (timeOfDay === "night" ? 0.72 : 1.18) : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.9 : 1.38,
+    );
     world.add(skyLight);
-    const sun = new THREE.DirectionalLight("#fff1d2", 2.4);
-    sun.position.copy(composition.target).add(new THREE.Vector3(-17, 26, 15));
+    const sun = new THREE.DirectionalLight(
+      timeOfDay === "night" ? "#aac8ff" : timeOfDay === "sunset" ? "#ffb06d" : "#fff1d2",
+      indoor ? (timeOfDay === "night" ? 0.78 : 1.45) : timeOfDay === "night" ? 1.05 : timeOfDay === "sunset" ? 2.15 : 1.72,
+    );
+    sun.position.copy(composition.target).add(
+      timeOfDay === "sunset" ? new THREE.Vector3(-24, 12, 10) : new THREE.Vector3(-17, 26, 15),
+    );
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 70;
-    sun.shadow.camera.left = -20;
-    sun.shadow.camera.right = 20;
-    sun.shadow.camera.top = 20;
-    sun.shadow.camera.bottom = -20;
+    const shadowExtent = indoor ? 8 : 15.5;
+    sun.shadow.camera.left = -shadowExtent;
+    sun.shadow.camera.right = shadowExtent;
+    sun.shadow.camera.top = shadowExtent;
+    sun.shadow.camera.bottom = -shadowExtent;
+    sun.shadow.radius = 3;
     sun.shadow.bias = -0.00018;
     sun.shadow.normalBias = 0.012;
     sun.target.position.copy(composition.target);
     world.add(sun, sun.target);
-    const fill = new THREE.DirectionalLight("#badff0", 0.24);
+    const fill = new THREE.DirectionalLight(
+      timeOfDay === "night" ? "#5579c2" : timeOfDay === "sunset" ? "#9f8bd5" : "#badff0",
+      indoor ? 0.48 : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.34 : 0.52,
+    );
     fill.position.copy(composition.target).add(new THREE.Vector3(16, 9, -12));
     world.add(fill);
+    if (!indoor) {
+      const softAmbient = new THREE.AmbientLight(
+        timeOfDay === "night" ? "#7390c4" : timeOfDay === "sunset" ? "#ffe1c8" : "#fff9e9",
+        timeOfDay === "night" ? 0.05 : timeOfDay === "sunset" ? 0.1 : 0.16,
+      );
+      world.add(softAmbient);
+    }
+    if (indoor) {
+      const roomGlow = new THREE.AmbientLight(timeOfDay === "night" ? "#ffc982" : "#fff0d4", timeOfDay === "night" ? 0.72 : 0.34);
+      world.add(roomGlow);
+    }
 
     const town = createTown(location);
     world.add(town.group);
@@ -472,8 +673,11 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       const character = createCharacter(prepareProfile(profile));
       const start = composition.starts[index % composition.starts.length];
       character.group.position.copy(start);
-      character.group.scale.setScalar(index === 0 ? 0.58 : 0.545 + (index % 3) * 0.008);
-      character.group.rotation.y = index % 2 === 0 ? 0.18 : -0.28;
+      character.group.scale.setScalar(index === 0 ? (indoor ? 0.56 : 0.72) : (indoor ? 0.53 : 0.68) + (index % 3) * 0.006);
+      if (indoor) character.group.rotation.y = index % 2 === 0 ? 0.18 : -0.28;
+      else {
+        character.group.lookAt(viewCamera.x, 0, viewCamera.z);
+      }
       character.group.userData.isSelected = index === 0;
       character.group.traverse((object) => {
         if (object instanceof THREE.Mesh) {
@@ -504,8 +708,8 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       group: character.group,
       initialState: index === 0 ? "idle" : index % 3 === 0 ? "walk" : "idle",
       targetPoints: composition.points,
-      walkSpeed: 0.58 + (index % 3) * 0.05,
-      runSpeed: 1.15 + (index % 2) * 0.1,
+      walkSpeed: (indoor ? 0.42 : 0.58) + (index % 3) * 0.05,
+      runSpeed: (indoor ? 0.78 : 1.15) + (index % 2) * 0.1,
       radius: 0.34,
       turnSpeed: 7.5,
       acceleration: 7,
@@ -523,8 +727,10 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     const director = createWorldDirector({
       residents: definitions,
       targetPoints: composition.points as PointLike[],
-      bounds: { minX: -19, maxX: 19, minZ: -16.5, maxZ: 16.5, y: 0 },
-      obstacles: TOWN_OBSTACLES,
+      bounds: indoor
+        ? { minX: -4.1, maxX: 4.1, minZ: -3.2, maxZ: 3.35, y: 0 }
+        : { minX: -19, maxX: 19, minZ: -16.5, maxZ: 16.5, y: 0 },
+      obstacles: indoor ? [] : TOWN_OBSTACLES,
       arrivalDistance: 0.14,
       avoidancePadding: 0.22,
       avoidanceStrength: 1.7,
@@ -536,7 +742,7 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
         target: composition.target,
         positionDamping: 2,
         targetDamping: 4,
-        minFov: 30,
+        minFov: 24,
         maxFov: 39,
       },
       applyAnimation(group, state, elapsed, delta) {
@@ -544,8 +750,7 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
         if (character) updateCharacter(character, state as CharacterState, elapsed, delta);
       },
     });
-    directorRef.current = director;
-    director.camera?.cut(composition.camera, composition.target, 34);
+    director.camera?.cut(viewCamera, viewTarget, viewFov);
 
     if (director.residents[1] && director.residents[2]) {
       director.startConversation(director.residents[1], director.residents[2], 6.5);
@@ -557,11 +762,24 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     }
 
     const atmosphere = createAtmosphere(composition.target);
+    // Keep the reference scene clean and readable. The old floating circles
+    // could cross the camera as dark discs on some WebGL drivers.
+    atmosphere.visible = false;
     world.add(atmosphere);
+    const weather = indoor ? null : createWeatherLayer(weatherMode, composition.target);
+    if (weather) world.add(weather.group);
 
     const clock = new THREE.Clock();
+    runtimeRef.current = { director, characters, clock, focus: null };
     const cameraDrift = new THREE.Vector3();
     const cameraPosition = new THREE.Vector3();
+    const focusCamera = new THREE.Vector3();
+    const focusTarget = new THREE.Vector3();
+    const selectedPosition = new THREE.Vector3();
+    const partnerPosition = new THREE.Vector3();
+    const focusSide = new THREE.Vector3();
+    const actionCameraOffset = new THREE.Vector3(3.45, 1.85, 4.35);
+    const restCameraOffset = new THREE.Vector3(3.1, 2.2, 4.1);
     let frameId = 0;
     let stopped = false;
     const render = () => {
@@ -569,21 +787,53 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       const delta = Math.min(clock.getDelta(), 0.06);
       const elapsed = clock.elapsedTime;
       town.update(elapsed);
+      weather?.update(elapsed);
 
-      cameraDrift.set(
-        Math.sin(elapsed * 0.12) * 0.32,
-        Math.sin(elapsed * 0.18 + 0.8) * 0.12,
-        Math.cos(elapsed * 0.1) * 0.22,
-      );
-      director.camera?.moveTo(
-        cameraPosition.copy(composition.camera).add(cameraDrift),
-        composition.target,
-        { positionDamping: 1.5, targetDamping: 4.2, fov: 34 },
-      );
+      const runtime = runtimeRef.current;
+      const focus = runtime?.focus;
+      const focusActive = Boolean(focus && focus.until > elapsed);
+      if (focusActive && focus) {
+        selected.group.getWorldPosition(selectedPosition);
+        if (focus.kind === "talk" && characters[1]) {
+          characters[1].group.getWorldPosition(partnerPosition);
+          focusTarget.copy(selectedPosition).lerp(partnerPosition, 0.5);
+          focusTarget.y += 1.18;
+          focusSide.subVectors(partnerPosition, selectedPosition).setY(0);
+          if (focusSide.lengthSq() < 0.001) focusSide.set(1, 0, 0);
+          focusSide.normalize().set(-focusSide.z, 0, focusSide.x);
+          focusCamera.copy(focusTarget).addScaledVector(focusSide, 3.7);
+          focusCamera.y += 1.55;
+          focusCamera.z += 0.55;
+        } else {
+          focusTarget.copy(selectedPosition);
+          focusTarget.y += 1.2;
+          focusCamera.copy(selectedPosition).add(focus.kind === "rest" ? restCameraOffset : actionCameraOffset);
+        }
+        director.camera?.moveTo(focusCamera, focusTarget, {
+          positionDamping: 4.8,
+          targetDamping: 6.5,
+          fov: focus.kind === "talk" ? 27 : 25,
+        });
+      } else {
+        if (runtime?.focus) runtime.focus = null;
+        const driftScale = indoor ? 0.38 : 1;
+        cameraDrift.set(
+          Math.sin(elapsed * 0.12) * 0.32 * driftScale,
+          Math.sin(elapsed * 0.18 + 0.8) * 0.12 * driftScale,
+          Math.cos(elapsed * 0.1) * 0.22 * driftScale,
+        );
+        director.camera?.moveTo(
+          cameraPosition.copy(viewCamera).add(cameraDrift),
+          viewTarget,
+          { positionDamping: 1.5, targetDamping: 4.2, fov: viewFov },
+        );
+      }
       director.update(delta, elapsed);
 
       const pulse = 1 + Math.sin(elapsed * 3.2) * 0.09;
       selectionRing.scale.setScalar(pulse);
+      selectionRing.visible = !focusActive;
+      nameTag.visible = !focusActive;
       nameTag.position.y = 3.68 + Math.sin(elapsed * 2.25) * 0.045;
       atmosphere.children.forEach((petal, index) => {
         const phase = Number(petal.userData.phase) || index;
@@ -613,20 +863,43 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       clock.stop();
-      if (directorRef.current === director) directorRef.current = null;
+      if (runtimeRef.current?.director === director) runtimeRef.current = null;
       disposeWorld(world);
       renderer.dispose();
       renderer.forceContextLoss();
       element.replaceChildren();
     };
-  }, [scene, selectedId, residentAppearanceKey]);
+  }, [scene, selectedId, residentAppearanceKey, timeOfDay, weatherMode, cinematicView]);
 
   useEffect(() => {
-    const director = directorRef.current;
+    const runtime = runtimeRef.current;
+    const director = runtime?.director;
     const selected = director?.residents[0];
-    if (!director || !selected || !actionCue) return;
+    if (!runtime || !director || !selected) return;
+    if (!actionCue) {
+      runtime.focus = null;
+      return;
+    }
+
+    const duration = actionCue.kind === "talk" ? 30 : actionCue.kind === "rest" ? 6.4 : 5.2;
+    runtime.focus = { kind: actionCue.kind, until: runtime.clock.elapsedTime + duration };
 
     if (actionCue.kind === "talk" && director.residents[1]) {
+      const selectedCharacter = runtime.characters[0];
+      const partnerCharacter = runtime.characters[1];
+      if (selectedCharacter && partnerCharacter) {
+        const distance = selectedCharacter.group.position.distanceTo(partnerCharacter.group.position);
+        if (distance > 2.1) {
+          partnerCharacter.group.position.copy(selectedCharacter.group.position);
+          partnerCharacter.group.position.x += 1.45;
+          partnerCharacter.group.position.z += 0.45;
+        }
+        selectedCharacter.group.rotation.y = Math.atan2(
+          partnerCharacter.group.position.x - selectedCharacter.group.position.x,
+          partnerCharacter.group.position.z - selectedCharacter.group.position.z,
+        );
+        partnerCharacter.group.rotation.y = selectedCharacter.group.rotation.y + Math.PI;
+      }
       director.startConversation(selected, director.residents[1], 6.5);
     } else if (actionCue.kind === "food") {
       director.setState(selected, "eat", { duration: 5.8, reason: "player-action" });
@@ -635,7 +908,7 @@ export default function World3D({ scene, selectedId, residents, actionCue }: Pro
     } else if (actionCue.kind === "play") {
       director.setState(selected, "happy", { duration: 4.2, reason: "player-action" });
     }
-  }, [actionCue, residentAppearanceKey, scene, selectedId]);
+  }, [actionCue, residentAppearanceKey, scene, selectedId, timeOfDay, weatherMode]);
 
   return <div className="world3d" ref={host} aria-label="晴天市实时三维生活场景" />;
 }
