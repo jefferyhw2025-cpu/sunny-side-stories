@@ -310,7 +310,20 @@ function surfaceTexture(pattern: TexturePattern): THREE.Texture {
     placeholderContext.fillStyle = "#f4f1e8";
     placeholderContext.fillRect(0, 0, 1, 1);
   }
-  const texture = new THREE.Texture(placeholder);
+  const texture = new THREE.TextureLoader().load(
+    new URL(asset, document.baseURI).href,
+    (loaded) => {
+      loaded.needsUpdate = true;
+    },
+    undefined,
+    () => {
+      // Keep the neutral placeholder: material colour, roughness and geometry
+      // remain fully readable even if the authored tile cannot be downloaded.
+    },
+  );
+  // TextureLoader will replace this image automatically when its request
+  // finishes. Assigning it synchronously prevents the default black sample.
+  texture.image = placeholder;
   texture.needsUpdate = true;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
@@ -320,18 +333,6 @@ function surfaceTexture(pattern: TexturePattern): THREE.Texture {
   texture.userData.shared = true;
   texture.userData.pattern = pattern;
   sharedTextures.set(pattern, texture);
-  new THREE.ImageLoader().load(
-    new URL(asset, document.baseURI).href,
-    (image) => {
-      texture.image = image;
-      texture.needsUpdate = true;
-    },
-    undefined,
-    () => {
-      // Keep the neutral placeholder: material colour, roughness and geometry
-      // remain fully readable even if the authored tile cannot be downloaded.
-    },
-  );
   return texture;
 }
 
