@@ -242,8 +242,8 @@ const CINEMATIC_VIEWS: Partial<
   Record<TownSceneName, { target: THREE.Vector3; camera: THREE.Vector3; fov: number }>
 > = {
   home: {
-    target: new THREE.Vector3(-5.2, 2.8, 8.3),
-    camera: new THREE.Vector3(6.8, 8.8, 22.5),
+    target: new THREE.Vector3(-3.8, 1.9, 10.3),
+    camera: new THREE.Vector3(2.65, 4.62, 17.93),
     fov: 34,
   },
   plaza: {
@@ -579,6 +579,7 @@ export default function World3D({
     const indoor = location === "shop" || location === "interior";
     const composition = SCENE_COMPOSITIONS[location];
     const cinematic = !indoor && cinematicView ? CINEMATIC_VIEWS[location] : undefined;
+    const stagedHomeOpening = location === "home" && Boolean(cinematic);
     const viewCamera = cinematic?.camera ?? composition.camera;
     const viewTarget = cinematic?.target ?? composition.target;
     const viewFov = cinematic?.fov ?? (indoor ? 34 : 33);
@@ -706,7 +707,14 @@ export default function World3D({
     const definitions: ResidentDefinition[] = characters.map((character, index) => ({
       id: String(character.profile.id),
       group: character.group,
-      initialState: index === 0 ? "idle" : index % 3 === 0 ? "walk" : "idle",
+      initialState:
+        stagedHomeOpening && index < 3
+          ? "idle"
+          : index === 0
+            ? "idle"
+            : index % 3 === 0
+              ? "walk"
+              : "idle",
       targetPoints: composition.points,
       walkSpeed: (indoor ? 0.42 : 0.58) + (index % 3) * 0.05,
       runSpeed: (indoor ? 0.78 : 1.15) + (index % 2) * 0.1,
@@ -714,7 +722,7 @@ export default function World3D({
       turnSpeed: 7.5,
       acceleration: 7,
       durations: {
-        idle: [1.4, 3.6],
+        idle: stagedHomeOpening && index < 3 ? [8, 11] : [1.4, 3.6],
         walk: [3.8, 7.5],
         run: [2.2, 4.2],
         talk: [4.4, 7.2],
@@ -752,7 +760,7 @@ export default function World3D({
     });
     director.camera?.cut(viewCamera, viewTarget, viewFov);
 
-    if (director.residents[1] && director.residents[2]) {
+    if (!stagedHomeOpening && director.residents[1] && director.residents[2]) {
       director.startConversation(director.residents[1], director.residents[2], 6.5);
     }
     if (director.residents[3]) director.setState(director.residents[3], "eat", { duration: 5.6 });
