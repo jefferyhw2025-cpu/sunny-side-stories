@@ -24,6 +24,7 @@ type Props = {
   actionCue?: { kind: "talk" | "food" | "play" | "rest"; token: number } | null;
   timeOfDay?: "day" | "sunset" | "night";
   weatherMode?: "clear" | "rain" | "snow";
+  cinematicView?: boolean;
 };
 
 type SceneComposition = {
@@ -124,12 +125,12 @@ const SUPPORTING_RESIDENTS: CharacterProfile[] = [
 
 const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   home: {
-    target: new THREE.Vector3(-9, 1.35, 4.7),
-    camera: new THREE.Vector3(5, 10.4, 21.6),
+    target: new THREE.Vector3(-9, 2.5, 4.7),
+    camera: new THREE.Vector3(4.2, 10.6, 22),
     points: [
-      new THREE.Vector3(-9.8, 0, 5.4),
-      new THREE.Vector3(-7.3, 0, 5.7),
-      new THREE.Vector3(-4.2, 0, 5.7),
+      new THREE.Vector3(-5, 0, 11.3),
+      new THREE.Vector3(-3.8, 0, 10.3),
+      new THREE.Vector3(-2.6, 0, 9.3),
       new THREE.Vector3(-3.1, 0, 2.8),
       new THREE.Vector3(-7.8, 0, 0.5),
       new THREE.Vector3(-11.8, 0, 7.6),
@@ -137,9 +138,9 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(-2.8, 0, 8.2),
     ],
     starts: [
-      new THREE.Vector3(-9.7, 0, 5.45),
-      new THREE.Vector3(-7.5, 0, 5.65),
-      new THREE.Vector3(-4.7, 0, 5.65),
+      new THREE.Vector3(-5, 0, 11.3),
+      new THREE.Vector3(-3.8, 0, 10.3),
+      new THREE.Vector3(-2.6, 0, 9.3),
       new THREE.Vector3(-3.1, 0, 2.65),
       new THREE.Vector3(-7.6, 0, 0.55),
       new THREE.Vector3(-11.5, 0, 7.5),
@@ -148,8 +149,8 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
     ],
   },
   plaza: {
-    target: new THREE.Vector3(-7.7, 1.15, -4.5),
-    camera: new THREE.Vector3(8.5, 11.7, 12.6),
+    target: new THREE.Vector3(-7.7, 1.55, -4.5),
+    camera: new THREE.Vector3(6.1, 10.1, 10.1),
     points: [
       new THREE.Vector3(-10.9, 0, -5.2),
       new THREE.Vector3(-4.5, 0, -5.2),
@@ -172,8 +173,8 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
     ],
   },
   cafe: {
-    target: new THREE.Vector3(7.5, 1.45, 1.1),
-    camera: new THREE.Vector3(23.1, 10.5, 18.4),
+    target: new THREE.Vector3(7.5, 1.75, 1.1),
+    camera: new THREE.Vector3(20.8, 9.3, 15.9),
     points: [
       new THREE.Vector3(7.9, 0, 1.2),
       new THREE.Vector3(5.2, 0, -0.1),
@@ -234,6 +235,26 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(-2.5, 0, -0.4),
       new THREE.Vector3(0.6, 0, 0.8),
     ],
+  },
+};
+
+const CINEMATIC_VIEWS: Partial<
+  Record<TownSceneName, { target: THREE.Vector3; camera: THREE.Vector3; fov: number }>
+> = {
+  home: {
+    target: new THREE.Vector3(-5.2, 2.8, 8.3),
+    camera: new THREE.Vector3(6.8, 8.8, 22.5),
+    fov: 34,
+  },
+  plaza: {
+    target: new THREE.Vector3(-7.7, 2.5, -4.5),
+    camera: new THREE.Vector3(5, 7.2, 6.5),
+    fov: 34,
+  },
+  cafe: {
+    target: new THREE.Vector3(7.9, 3, -1.4),
+    camera: new THREE.Vector3(8.5, 11, 29),
+    fov: 35,
   },
 };
 
@@ -382,7 +403,7 @@ function createSkyTexture(timeOfDay: TimeOfDay): THREE.CanvasTexture {
       ? ["#101a38", "#223d67", "#5d7392", "#c3a99d"]
       : timeOfDay === "sunset"
         ? ["#667fc4", "#e9a37f", "#f6c68c", "#f7e0ba"]
-        : ["#75bce9", "#a9daf0", "#d8eceb", "#f4e9d4"];
+        : ["#3f9fe8", "#78c7f2", "#bce7f7", "#edf7ef"];
     const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
     gradient.addColorStop(0, palette[0]);
     gradient.addColorStop(0.48, palette[1]);
@@ -521,6 +542,7 @@ export default function World3D({
   actionCue,
   timeOfDay = "day",
   weatherMode = "clear",
+  cinematicView = false,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const residentsRef = useRef(residents);
@@ -556,18 +578,26 @@ export default function World3D({
     const location = sceneName(scene);
     const indoor = location === "shop" || location === "interior";
     const composition = SCENE_COMPOSITIONS[location];
-    const profiles = chooseResidents(residentsRef.current, selectedId).slice(0, indoor ? 4 : 6);
+    const cinematic = !indoor && cinematicView ? CINEMATIC_VIEWS[location] : undefined;
+    const viewCamera = cinematic?.camera ?? composition.camera;
+    const viewTarget = cinematic?.target ?? composition.target;
+    const viewFov = cinematic?.fov ?? (indoor ? 34 : 33);
+    const profiles = chooseResidents(residentsRef.current, selectedId).slice(0, 4);
     const world = new THREE.Scene();
     world.name = "Sunny Side Stories";
     world.background = createSkyTexture(timeOfDay);
-    const fogColor = timeOfDay === "night" ? "#243653" : timeOfDay === "sunset" ? "#d6ac9f" : "#d5e8e6";
-    world.fog = new THREE.Fog(fogColor, indoor ? 18 : 31, indoor ? 48 : 82);
+    const fogColor = timeOfDay === "night" ? "#243653" : timeOfDay === "sunset" ? "#ddb8a8" : "#c9e9f3";
+    world.fog = new THREE.Fog(
+      fogColor,
+      indoor ? 18 : timeOfDay === "night" ? 31 : 42,
+      indoor ? 48 : timeOfDay === "night" ? 82 : 110,
+    );
 
     const width = Math.max(1, element.clientWidth);
     const height = Math.max(1, element.clientHeight);
-    const camera = new THREE.PerspectiveCamera(34, width / height, 0.1, 140);
-    camera.position.copy(composition.camera);
-    camera.lookAt(composition.target);
+    const camera = new THREE.PerspectiveCamera(viewFov, width / height, 0.1, 140);
+    camera.position.copy(viewCamera);
+    camera.lookAt(viewTarget);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -586,18 +616,19 @@ export default function World3D({
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 0.96 : 0.78) : timeOfDay === "sunset" ? 0.94 : 1.02;
+    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 0.96 : 0.8) : timeOfDay === "sunset" ? 0.98 : 1.06;
+    renderer.domElement.style.imageRendering = "auto";
     element.replaceChildren(renderer.domElement);
 
     const skyLight = new THREE.HemisphereLight(
-      timeOfDay === "night" ? "#7894c8" : timeOfDay === "sunset" ? "#ffe1c4" : "#fffaf0",
-      timeOfDay === "night" ? "#18243d" : timeOfDay === "sunset" ? "#806a72" : "#6f9273",
-      indoor ? (timeOfDay === "night" ? 0.72 : 1.18) : timeOfDay === "night" ? 0.38 : timeOfDay === "sunset" ? 0.78 : 1.05,
+      timeOfDay === "night" ? "#7894c8" : timeOfDay === "sunset" ? "#ffe1c4" : "#e6f6ff",
+      timeOfDay === "night" ? "#18243d" : timeOfDay === "sunset" ? "#806a72" : "#a8bb91",
+      indoor ? (timeOfDay === "night" ? 0.72 : 1.18) : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.9 : 1.38,
     );
     world.add(skyLight);
     const sun = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#aac8ff" : timeOfDay === "sunset" ? "#ffb06d" : "#fff1d2",
-      indoor ? (timeOfDay === "night" ? 0.78 : 1.45) : timeOfDay === "night" ? 1.05 : timeOfDay === "sunset" ? 2.65 : 2.4,
+      indoor ? (timeOfDay === "night" ? 0.78 : 1.45) : timeOfDay === "night" ? 1.05 : timeOfDay === "sunset" ? 2.15 : 1.72,
     );
     sun.position.copy(composition.target).add(
       timeOfDay === "sunset" ? new THREE.Vector3(-24, 12, 10) : new THREE.Vector3(-17, 26, 15),
@@ -606,20 +637,29 @@ export default function World3D({
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 70;
-    sun.shadow.camera.left = -20;
-    sun.shadow.camera.right = 20;
-    sun.shadow.camera.top = 20;
-    sun.shadow.camera.bottom = -20;
+    const shadowExtent = indoor ? 8 : 15.5;
+    sun.shadow.camera.left = -shadowExtent;
+    sun.shadow.camera.right = shadowExtent;
+    sun.shadow.camera.top = shadowExtent;
+    sun.shadow.camera.bottom = -shadowExtent;
+    sun.shadow.radius = 3;
     sun.shadow.bias = -0.00018;
     sun.shadow.normalBias = 0.012;
     sun.target.position.copy(composition.target);
     world.add(sun, sun.target);
     const fill = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#5579c2" : timeOfDay === "sunset" ? "#9f8bd5" : "#badff0",
-      indoor ? 0.48 : timeOfDay === "night" ? 0.42 : 0.24,
+      indoor ? 0.48 : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.34 : 0.52,
     );
     fill.position.copy(composition.target).add(new THREE.Vector3(16, 9, -12));
     world.add(fill);
+    if (!indoor) {
+      const softAmbient = new THREE.AmbientLight(
+        timeOfDay === "night" ? "#7390c4" : timeOfDay === "sunset" ? "#ffe1c8" : "#fff9e9",
+        timeOfDay === "night" ? 0.05 : timeOfDay === "sunset" ? 0.1 : 0.16,
+      );
+      world.add(softAmbient);
+    }
     if (indoor) {
       const roomGlow = new THREE.AmbientLight(timeOfDay === "night" ? "#ffc982" : "#fff0d4", timeOfDay === "night" ? 0.72 : 0.34);
       world.add(roomGlow);
@@ -633,8 +673,11 @@ export default function World3D({
       const character = createCharacter(prepareProfile(profile));
       const start = composition.starts[index % composition.starts.length];
       character.group.position.copy(start);
-      character.group.scale.setScalar(index === 0 ? (indoor ? 0.56 : 0.58) : (indoor ? 0.53 : 0.545) + (index % 3) * 0.008);
-      character.group.rotation.y = index % 2 === 0 ? 0.18 : -0.28;
+      character.group.scale.setScalar(index === 0 ? (indoor ? 0.56 : 0.72) : (indoor ? 0.53 : 0.68) + (index % 3) * 0.006);
+      if (indoor) character.group.rotation.y = index % 2 === 0 ? 0.18 : -0.28;
+      else {
+        character.group.lookAt(viewCamera.x, 0, viewCamera.z);
+      }
       character.group.userData.isSelected = index === 0;
       character.group.traverse((object) => {
         if (object instanceof THREE.Mesh) {
@@ -707,7 +750,7 @@ export default function World3D({
         if (character) updateCharacter(character, state as CharacterState, elapsed, delta);
       },
     });
-    director.camera?.cut(composition.camera, composition.target, 34);
+    director.camera?.cut(viewCamera, viewTarget, viewFov);
 
     if (director.residents[1] && director.residents[2]) {
       director.startConversation(director.residents[1], director.residents[2], 6.5);
@@ -719,7 +762,9 @@ export default function World3D({
     }
 
     const atmosphere = createAtmosphere(composition.target);
-    atmosphere.visible = !indoor && weatherMode === "clear";
+    // Keep the reference scene clean and readable. The old floating circles
+    // could cross the camera as dark discs on some WebGL drivers.
+    atmosphere.visible = false;
     world.add(atmosphere);
     const weather = indoor ? null : createWeatherLayer(weatherMode, composition.target);
     if (weather) world.add(weather.group);
@@ -778,9 +823,9 @@ export default function World3D({
           Math.cos(elapsed * 0.1) * 0.22 * driftScale,
         );
         director.camera?.moveTo(
-          cameraPosition.copy(composition.camera).add(cameraDrift),
-          composition.target,
-          { positionDamping: 1.5, targetDamping: 4.2, fov: indoor ? 32 : 34 },
+          cameraPosition.copy(viewCamera).add(cameraDrift),
+          viewTarget,
+          { positionDamping: 1.5, targetDamping: 4.2, fov: viewFov },
         );
       }
       director.update(delta, elapsed);
@@ -824,7 +869,7 @@ export default function World3D({
       renderer.forceContextLoss();
       element.replaceChildren();
     };
-  }, [scene, selectedId, residentAppearanceKey, timeOfDay, weatherMode]);
+  }, [scene, selectedId, residentAppearanceKey, timeOfDay, weatherMode, cinematicView]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

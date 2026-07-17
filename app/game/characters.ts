@@ -393,20 +393,20 @@ function createNose(parent: THREE.Object3D, style: string, skinShadow: Character
   if (includesAny(resolved, ["point", "sharp", "long"])) {
     addMesh(
       parent,
-      cachedGeometry(`nose-cone:${resolved}`, () => new THREE.ConeGeometry(resolved === "long" ? 0.046 : 0.058, resolved === "long" ? 0.18 : 0.135, 12)),
+      cachedGeometry(`nose-cone:${resolved}`, () => new THREE.ConeGeometry(resolved === "long" ? 0.038 : 0.048, resolved === "long" ? 0.13 : 0.1, 12)),
       skinShadow,
-      [0, 0.195, 0.584],
-      [1, 1, 1],
+      [0, 0.195, 0.58],
+      [1, 1, 0.62],
       [90 * DEG, 0, 0],
     );
   } else if (includesAny(resolved, ["line", "small", "subtle", "tiny"])) {
-    const nose = addMesh(parent, cachedGeometry("nose-line", () => new THREE.CapsuleGeometry(0.015, 0.07, 4, 10)), skinShadow, [0, 0.2, 0.577], [1, resolved === "tiny" ? 0.65 : 1, 0.7]);
+    const nose = addMesh(parent, cachedGeometry("nose-line", () => new THREE.CapsuleGeometry(0.012, 0.055, 4, 10)), skinShadow, [0, 0.2, 0.577], [1, resolved === "tiny" ? 0.65 : 1, 0.55]);
     nose.rotation.z = -5 * DEG;
   } else if (resolved === "soft-triangle" || resolved === "upturned") {
-    addMesh(parent, cachedGeometry("nose-soft-triangle", () => new THREE.ConeGeometry(0.055, 0.07, 3)), skinShadow, [0, resolved === "upturned" ? 0.22 : 0.19, 0.582], [1, 1, 0.5], [90 * DEG, 0, resolved === "upturned" ? Math.PI : 0]);
+    addMesh(parent, cachedGeometry("nose-soft-triangle", () => new THREE.ConeGeometry(0.044, 0.055, 3)), skinShadow, [0, resolved === "upturned" ? 0.215 : 0.19, 0.58], [1, 1, 0.35], [90 * DEG, 0, resolved === "upturned" ? Math.PI : 0]);
   } else {
     const broad = resolved === "broad";
-    addMesh(parent, cachedGeometry("nose-button", () => new THREE.SphereGeometry(0.062, 18, 12)), skinShadow, [0, 0.19, 0.578], [broad ? 1.22 : 0.86, broad ? 0.62 : 0.72, 0.72]);
+    addMesh(parent, cachedGeometry("nose-button", () => new THREE.SphereGeometry(0.052, 18, 12)), skinShadow, [0, 0.19, 0.578], [broad ? 1.18 : 0.82, broad ? 0.58 : 0.66, 0.46]);
   }
   if (resolved === "freckle") {
     const freckle = material("#9b654e", { surface: "detail" });
@@ -478,7 +478,9 @@ function addHair(
   hairHighlight: CharacterMaterial,
 ): void {
   const style = resolveStyle(profile.hairStyle, HAIR_STYLES, "crop");
-  const capGeometry = cachedGeometry("hair-cap", () => new THREE.SphereGeometry(0.625, 30, 18, 0, Math.PI * 2, 0, Math.PI * 0.61));
+  // Stop the cap above the eye line. Extending the spherical shell past the
+  // forehead made several styles read as a dark helmet and hid the large eyes.
+  const capGeometry = cachedGeometry("hair-cap", () => new THREE.SphereGeometry(0.625, 30, 18, 0, Math.PI * 2, 0, Math.PI * 0.46));
   const lockGeometry = cachedGeometry("hair-lock", () => new THREE.SphereGeometry(0.18, 20, 14));
   const curlGeometry = cachedGeometry("hair-curl", () => new THREE.SphereGeometry(0.22, 18, 14));
   const sideGeometry = cachedGeometry("hair-side-lock", () => new THREE.CapsuleGeometry(0.105, 0.34, 7, 16));
@@ -618,6 +620,8 @@ function addOutfit(
   trouserMaterial: CharacterMaterial,
 ): string {
   const outfit = resolveStyle(profile.outfitStyle, OUTFIT_STYLES, "tee");
+  const torsoStart = torso.children.length;
+  const hipsStart = hips.children.length;
   const relaxed = includesAny(outfit, ["sweater", "hoodie"]);
   addMesh(torso, cachedGeometry("outfit-torso", () => new THREE.CylinderGeometry(0.43, 0.53, 0.82, 24)), shirtMaterial, [0, 0, 0], [relaxed ? 1.05 : 1, 1, relaxed ? 0.87 : 0.82]);
   addMesh(torso, cachedGeometry("outfit-hem", () => new THREE.CylinderGeometry(0.445, 0.54, 0.12, 24)), shirtShadow, [0, -0.36, 0], [relaxed ? 1.05 : 1, 1, 0.83]);
@@ -665,6 +669,21 @@ function addOutfit(
     addMesh(torso, cachedGeometry("tee-stripe", () => new THREE.BoxGeometry(0.57, 0.055, 0.055)), shirtAccent, [0, 0.16, 0.42], [1, 1, 1], [0, 0, -3 * DEG]);
     addMesh(torso, cachedGeometry("tee-pocket", () => new THREE.BoxGeometry(0.2, 0.15, 0.025)), shirtShadow, [0.19, -0.11, 0.445], [1, 1, 1], [0, 0, -2 * DEG]);
   }
+
+  // Keep clothing graphic and compact: this scales only garment meshes, not the
+  // animation rig or the head that are attached to the same joints later.
+  for (const child of torso.children.slice(torsoStart)) {
+    if (!(child instanceof THREE.Mesh)) continue;
+    child.position.y *= 0.85;
+    child.scale.x *= 0.92;
+    child.scale.y *= 0.85;
+  }
+  for (const child of hips.children.slice(hipsStart)) {
+    if (!(child instanceof THREE.Mesh)) continue;
+    child.position.y *= 0.88;
+    child.scale.x *= 0.92;
+    child.scale.y *= 0.88;
+  }
   return outfit;
 }
 
@@ -676,28 +695,25 @@ function addArm(
   shirtAccent: CharacterMaterial,
   outfitStyle: string,
 ): { shoulder: THREE.Group; arm: THREE.Group; forearm: THREE.Group; hand: THREE.Group } {
-  const shoulder = joint(chest, side * 0.49, 0.25, 0);
+  const shoulder = joint(chest, side * 0.43, 0.22, 0);
   const arm = joint(shoulder, 0, 0, 0);
   const longSleeve = includesAny(outfitStyle, ["jacket", "sweater", "hoodie", "coat"]);
-  addMesh(arm, cachedGeometry("arm-upper", () => new THREE.CylinderGeometry(0.105, 0.09, 0.38, 18)), shirtMaterial, [0, -0.18, 0]);
-  addMesh(arm, cachedGeometry("sleeve-cuff", () => new THREE.CylinderGeometry(0.112, 0.112, 0.07, 18)), shirtAccent, [0, -0.36, 0]);
+  addMesh(arm, cachedGeometry("arm-upper-chibi", () => new THREE.CylinderGeometry(0.11, 0.095, 0.34, 18)), shirtMaterial, [0, -0.16, 0]);
+  addMesh(arm, cachedGeometry("sleeve-cuff-chibi", () => new THREE.CylinderGeometry(0.116, 0.116, 0.065, 18)), shirtAccent, [0, -0.31, 0]);
 
-  const forearm = joint(arm, 0, -0.39, 0);
-  addMesh(forearm, cachedGeometry("arm-forearm", () => new THREE.CylinderGeometry(0.085, 0.073, 0.38, 18)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.18, 0]);
-  if (longSleeve) addMesh(forearm, cachedGeometry("wrist-cuff", () => new THREE.CylinderGeometry(0.088, 0.088, 0.07, 18)), shirtAccent, [0, -0.36, 0]);
-  const hand = joint(forearm, 0, -0.39, 0);
-  addMesh(hand, cachedGeometry("hand-palm", () => new THREE.SphereGeometry(0.105, 18, 13)), skinMaterial, [0, -0.055, 0.01], [0.82, 1.08, 0.7]);
+  const forearm = joint(arm, 0, -0.34, 0);
+  addMesh(forearm, cachedGeometry("arm-forearm-chibi", () => new THREE.CylinderGeometry(0.09, 0.078, 0.33, 18)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.155, 0]);
+  if (longSleeve) addMesh(forearm, cachedGeometry("wrist-cuff-chibi", () => new THREE.CylinderGeometry(0.093, 0.093, 0.065, 18)), shirtAccent, [0, -0.3, 0]);
+  const hand = joint(forearm, 0, -0.34, 0);
+  addMesh(hand, cachedGeometry("hand-palm-chibi", () => new THREE.SphereGeometry(0.112, 18, 13)), skinMaterial, [0, -0.045, 0.01], [0.94, 1.02, 0.78]);
   addMesh(
     hand,
-    cachedGeometry("hand-thumb", () => new THREE.CapsuleGeometry(0.028, 0.055, 4, 10)),
+    cachedGeometry("hand-thumb-chibi", () => new THREE.CapsuleGeometry(0.029, 0.045, 4, 10)),
     skinMaterial,
-    [-side * 0.071, -0.045, 0.045],
-    [0.82, 1, 0.82],
+    [-side * 0.076, -0.036, 0.045],
+    [0.9, 1, 0.86],
     [0, 0, side * 24 * DEG],
   );
-  for (const offset of [-0.034, 0, 0.034]) {
-    addMesh(hand, cachedGeometry("hand-finger", () => new THREE.CapsuleGeometry(0.016, 0.055, 4, 9)), skinMaterial, [offset, -0.115, 0.035], [1, 1, 0.85]);
-  }
   return { shoulder, arm, forearm, hand };
 }
 
@@ -709,21 +725,21 @@ function addLeg(
   shoeMaterial: CharacterMaterial,
   outfitStyle: string | number,
 ): { leg: THREE.Group; shin: THREE.Group; foot: THREE.Group } {
-  const leg = joint(hips, side * 0.235, -0.18, 0);
+  const leg = joint(hips, side * 0.205, -0.14, 0);
   const resolvedOutfit = resolveStyle(outfitStyle, OUTFIT_STYLES, "tee");
   const dress = includesAny(resolvedOutfit, ["dress", "skirt"]);
   const upperMaterial = dress ? skinMaterial : trouserMaterial;
-  addMesh(leg, cachedGeometry("leg-upper", () => new THREE.CylinderGeometry(0.13, 0.115, 0.5, 18)), upperMaterial, [0, -0.24, 0]);
+  addMesh(leg, cachedGeometry("leg-upper-chibi", () => new THREE.CylinderGeometry(0.135, 0.12, 0.42, 18)), upperMaterial, [0, -0.2, 0]);
 
-  const shin = joint(leg, 0, -0.5, 0);
-  addMesh(shin, cachedGeometry("leg-shin", () => new THREE.CylinderGeometry(0.11, 0.085, 0.47, 18)), skinMaterial, [0, -0.22, 0]);
-  addMesh(shin, cachedGeometry("shoe-collar", () => new THREE.CylinderGeometry(0.105, 0.105, 0.14, 18)), shoeMaterial, [0, -0.4, 0]);
+  const shin = joint(leg, 0, -0.42, 0);
+  addMesh(shin, cachedGeometry("leg-shin-chibi", () => new THREE.CylinderGeometry(0.115, 0.09, 0.39, 18)), skinMaterial, [0, -0.18, 0]);
+  addMesh(shin, cachedGeometry("shoe-collar-chibi", () => new THREE.CylinderGeometry(0.108, 0.108, 0.12, 18)), shoeMaterial, [0, -0.33, 0]);
 
-  const foot = joint(shin, 0, -0.47, 0.08);
-  addMesh(foot, cachedGeometry("shoe-upper", () => new THREE.CapsuleGeometry(0.105, 0.2, 6, 16)), shoeMaterial, [0, -0.015, 0.105], [1.08, 1, 1], [90 * DEG, 0, 0]);
-  addMesh(foot, cachedGeometry("shoe-toe", () => new THREE.SphereGeometry(0.12, 18, 12)), shoeMaterial, [0, -0.02, 0.28], [1.08, 0.72, 1.15]);
-  addMesh(foot, cachedGeometry("shoe-sole", () => new THREE.BoxGeometry(0.27, 0.045, 0.43)), material("#e9edf0"), [0, -0.11, 0.12]);
-  addMesh(foot, cachedGeometry("shoe-lace", () => new THREE.BoxGeometry(0.12, 0.018, 0.11)), material("#d7dde2"), [0, 0.07, 0.15], [1, 1, 1], [0, 0, 0]);
+  const foot = joint(shin, 0, -0.4, 0.07);
+  addMesh(foot, cachedGeometry("shoe-upper-chibi", () => new THREE.CapsuleGeometry(0.105, 0.15, 6, 16)), shoeMaterial, [0, -0.012, 0.085], [1.08, 1, 1], [90 * DEG, 0, 0]);
+  addMesh(foot, cachedGeometry("shoe-toe-chibi", () => new THREE.SphereGeometry(0.116, 18, 12)), shoeMaterial, [0, -0.018, 0.235], [1.08, 0.74, 1.08]);
+  addMesh(foot, cachedGeometry("shoe-sole-chibi", () => new THREE.BoxGeometry(0.255, 0.042, 0.36)), material("#e9edf0"), [0, -0.1, 0.09]);
+  addMesh(foot, cachedGeometry("shoe-lace-chibi", () => new THREE.BoxGeometry(0.11, 0.016, 0.09)), material("#d7dde2"), [0, 0.064, 0.125]);
   return { leg, shin, foot };
 }
 
@@ -739,21 +755,21 @@ function createHeadGeometry(faceStyle: string): THREE.BufferGeometry {
       let width = 1;
       let depth = 1;
       if (faceStyle === "heart") {
-        width = THREE.MathUtils.lerp(0.82, 1.08, (normalizedY + 1) * 0.5);
-        depth = THREE.MathUtils.lerp(0.94, 1.02, (normalizedY + 1) * 0.5);
+        width = THREE.MathUtils.lerp(0.9, 1.055, (normalizedY + 1) * 0.5);
+        depth = THREE.MathUtils.lerp(0.96, 1.01, (normalizedY + 1) * 0.5);
       } else if (faceStyle === "soft-square") {
-        width = 1 + 0.075 * (1 - Math.abs(normalizedY));
-        if (normalizedY < -0.35) width *= 1.035;
-        depth = 0.96;
+        width = 1 + 0.045 * (1 - Math.abs(normalizedY));
+        if (normalizedY < -0.35) width *= 1.018;
+        depth = 0.975;
       } else if (faceStyle === "broad") {
-        width = 1.07 + 0.04 * (1 - Math.abs(normalizedY));
-        depth = 0.98;
+        width = 1.04 + 0.025 * (1 - Math.abs(normalizedY));
+        depth = 0.99;
       } else if (faceStyle === "slim") {
-        width = THREE.MathUtils.lerp(0.86, 0.96, (normalizedY + 1) * 0.5);
-        depth = 0.95;
+        width = THREE.MathUtils.lerp(0.93, 0.985, (normalizedY + 1) * 0.5);
+        depth = 0.975;
       } else if (faceStyle === "oval") {
-        width = 0.96;
-        depth = 0.98;
+        width = 0.985;
+        depth = 0.99;
       }
       position.setXYZ(index, x * width, y, z * depth);
     }
@@ -773,16 +789,17 @@ export function createCharacter(profile: CharacterProfile): Character {
 
   const root = joint(group, 0, 0, 0);
   root.name = "motion-root";
-  const hips = joint(root, 0, 1.13, 0);
+  const hips = joint(root, 0, 1, 0);
   hips.name = "hips";
-  const torso = joint(hips, 0, 0.43, 0);
+  const torso = joint(hips, 0, 0.37, 0);
   torso.name = "torso";
-  const chest = joint(torso, 0, 0.08, 0);
+  const chest = joint(torso, 0, 0.06, 0);
   chest.name = "chest";
-  const neck = joint(torso, 0, 0.53, 0);
+  const neck = joint(torso, 0, 0.46, 0);
   neck.name = "neck";
-  const head = joint(neck, 0, 0.34, 0);
+  const head = joint(neck, 0, 0.3, 0);
   head.name = "head";
+  head.scale.setScalar(1.06);
 
   const skinMaterial = material(profile.skin || "#d99a73", { surface: "skin" });
   const skinShadow = material(shiftedColor(profile.skin, -0.1, "#b9795d"), { surface: "skin" });
@@ -799,16 +816,16 @@ export function createCharacter(profile: CharacterProfile): Character {
 
   const face = resolveFaceStyle(profile.faceShape);
   const headScale: readonly [number, number, number] = face === "round"
-    ? [1.02, 0.98, 0.96]
+    ? [1.055, 0.975, 0.96]
     : face === "oval"
-      ? [0.94, 1.07, 0.94]
+      ? [1, 0.985, 0.95]
       : face === "soft-square"
-        ? [0.99, 1, 0.94]
+        ? [1.035, 0.99, 0.95]
         : face === "heart"
-          ? [1, 1.02, 0.94]
+          ? [1.035, 0.985, 0.95]
           : face === "slim"
-            ? [0.92, 1.08, 0.93]
-            : [1.04, 0.98, 0.95];
+            ? [0.995, 0.985, 0.945]
+            : [1.06, 0.98, 0.96];
   const headMesh = addMesh(head, createHeadGeometry(face), skinMaterial, [0, 0.25, 0], headScale);
   headMesh.name = "face";
 
@@ -816,13 +833,13 @@ export function createCharacter(profile: CharacterProfile): Character {
   const eyeStyle = resolveStyle(profile.eyeStyle, EYE_STYLES, "classic");
   const eyes = joint(head, 0, 0, 0);
   eyes.name = "eyes";
-  const leftEye = createEye(eyes, -0.2, eyeStyle, skinMaterial);
-  const rightEye = createEye(eyes, 0.2, eyeStyle, skinMaterial);
+  const leftEye = createEye(eyes, -0.21, eyeStyle, skinMaterial);
+  const rightEye = createEye(eyes, 0.21, eyeStyle, skinMaterial);
   leftEye.name = "left-eye";
   rightEye.name = "right-eye";
   const browStyle = resolveStyle(profile.browStyle, BROW_STYLES, "soft");
-  const leftBrow = createBrow(head, -0.2, browStyle, hairMaterial);
-  const rightBrow = createBrow(head, 0.2, browStyle, hairMaterial);
+  const leftBrow = createBrow(head, -0.21, browStyle, hairMaterial);
+  const rightBrow = createBrow(head, 0.21, browStyle, hairMaterial);
   leftBrow.name = "left-brow";
   rightBrow.name = "right-brow";
   createNose(head, resolveStyle(profile.noseStyle, NOSE_STYLES, "button"), skinShadow);

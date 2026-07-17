@@ -38,21 +38,21 @@ type TreeCrown = {
 
 const COLORS = {
   ink: 0x344b4f,
-  grass: 0x75bd62,
-  grassLight: 0x94d679,
-  grassDark: 0x4f9955,
-  road: 0x65717a,
-  roadEdge: 0x4c5962,
-  paving: 0xf2cf95,
-  pavingLight: 0xffe4ad,
-  cream: 0xfff1cf,
+  grass: 0x79c866,
+  grassLight: 0xa0dc82,
+  grassDark: 0x4f9f55,
+  road: 0xd8d3c7,
+  roadEdge: 0xb8b1a2,
+  paving: 0xe8ddcb,
+  pavingLight: 0xf7ecda,
+  cream: 0xfff3d9,
   white: 0xfffbec,
   wood: 0x966344,
   darkWood: 0x674536,
-  water: 0x55c9e8,
-  waterLight: 0xb9f5ff,
-  stone: 0xcbd1c8,
-  stoneDark: 0x9da9a5,
+  water: 0x61d3f2,
+  waterLight: 0xd0f9ff,
+  stone: 0xd8d4c9,
+  stoneDark: 0xaaa99f,
   leaf: 0x4da75c,
   leafLight: 0x70c768,
   leafDark: 0x34784b,
@@ -88,7 +88,6 @@ const AUTHORED_TEXTURE_ASSETS: Partial<Record<TexturePattern, string>> = {
   stucco: "textures/v2-stucco.png",
   roof: "textures/v2-roof.png",
   paving: "textures/v2-stone.png",
-  water: "textures/v2-water.png",
 };
 
 const PATTERN_REPEAT: Record<TexturePattern, readonly [number, number]> = {
@@ -390,6 +389,7 @@ function materialKey(
     emissive,
     options.side ?? THREE.FrontSide,
     mapName,
+    options.vertexColors ? 1 : 0,
   ].join(":");
 }
 
@@ -458,12 +458,14 @@ function waterMaterial(color: THREE.ColorRepresentation): THREE.MeshPhysicalMate
   if (cached instanceof THREE.MeshPhysicalMaterial) return cached;
   const result = new THREE.MeshPhysicalMaterial({
     color,
-    roughness: 0.2,
+    roughness: 0.13,
     metalness: 0,
-    clearcoat: 0.9,
-    clearcoatRoughness: 0.08,
+    clearcoat: 1,
+    clearcoatRoughness: 0.055,
     transparent: true,
-    opacity: 0.8,
+    opacity: 0.91,
+    emissive: 0x1599c8,
+    emissiveIntensity: 0.055,
     map: surfaceTexture("water"),
   });
   result.userData.shared = true;
@@ -634,6 +636,156 @@ function gableRoofGeometry(width: number, depth: number, rise: number): THREE.Bu
   return geometry;
 }
 
+function timberBeam(
+  parent: THREE.Object3D,
+  from: readonly [number, number, number],
+  to: readonly [number, number, number],
+  thickness = 0.15,
+  depth = 0.16,
+  color: THREE.ColorRepresentation = 0x7d5137,
+): THREE.Mesh {
+  const start = new THREE.Vector3(...from);
+  const end = new THREE.Vector3(...to);
+  const direction = end.clone().sub(start);
+  const beam = addMesh(
+    parent,
+    new THREE.BoxGeometry(thickness, direction.length(), depth),
+    patternedMaterial(color, "wood", { roughness: 0.78 }),
+  );
+  beam.position.copy(start).add(end).multiplyScalar(0.5);
+  beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  beam.castShadow = true;
+  return beam;
+}
+
+function createTiledGableRoof(
+  parent: THREE.Object3D,
+  width: number,
+  depth: number,
+  rise: number,
+  baseY: number,
+  roofColor: THREE.ColorRepresentation,
+  gableColor: THREE.ColorRepresentation,
+): THREE.Mesh {
+  const roof = addMesh(
+    parent,
+    gableRoofGeometry(width, depth, rise),
+    patternedMaterial(roofColor, "roof", {
+      roughness: 0.78,
+      side: THREE.DoubleSide,
+    }),
+    [0, baseY, 0],
+  );
+  roof.castShadow = true;
+  addEdges(roof, 0x754536, 0.12, 25);
+
+  // Cover the solid red end caps with a pale plaster gable. The roof then
+  // reads as two tiled slopes sitting on a real timber-framed wall.
+  const gableShape = new THREE.Shape();
+  gableShape.moveTo(-width / 2 + 0.12, 0.04);
+  gableShape.lineTo(width / 2 - 0.12, 0.04);
+  gableShape.lineTo(0, rise - 0.12);
+  gableShape.closePath();
+  const gableMaterial = patternedMaterial(gableColor, "stucco", {
+    roughness: 0.94,
+    side: THREE.DoubleSide,
+  });
+  for (const z of [-depth / 2 - 0.025, depth / 2 + 0.025]) {
+    const gable = addMesh(
+      parent,
+      new THREE.ShapeGeometry(gableShape, 3),
+      gableMaterial,
+      [0, baseY, z],
+    );
+    gable.castShadow = false;
+  }
+
+  // A single instanced draw creates the repeated rounded terracotta ridges.
+  const rowCount = 8;
+  const rows = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.068, 0.075, depth + 0.22, 9),
+    toon(new THREE.Color(roofColor).lerp(new THREE.Color(0xf28a5f), 0.32).getHex(), {
+      roughness: 0.72,
+    }),
+    rowCount * 2 + 1,
+  );
+  rows.name = "Terracotta roof ridges";
+  rows.castShadow = false;
+  rows.receiveShadow = false;
+  const matrix = new THREE.Matrix4();
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));
+  const scale = new THREE.Vector3(1, 1, 1);
+  let instance = 0;
+  for (const side of [-1, 1]) {
+    for (let row = 0; row < rowCount; row += 1) {
+      const progress = (row + 0.62) / (rowCount + 0.25);
+      const position = new THREE.Vector3(
+        side * (width / 2) * progress,
+        baseY + rise * (1 - progress) + 0.075,
+        0,
+      );
+      matrix.compose(position, rotation, scale);
+      rows.setMatrixAt(instance, matrix);
+      instance += 1;
+    }
+  }
+  matrix.compose(new THREE.Vector3(0, baseY + rise + 0.075, 0), rotation, scale);
+  rows.setMatrixAt(instance, matrix);
+  rows.instanceMatrix.needsUpdate = true;
+  parent.add(rows);
+
+  const frontZ = depth / 2 + 0.11;
+  const backZ = -depth / 2 - 0.11;
+  for (const z of [frontZ, backZ]) {
+    timberBeam(parent, [-width / 2, baseY, z], [0, baseY + rise, z], 0.15, 0.14);
+    timberBeam(parent, [0, baseY + rise, z], [width / 2, baseY, z], 0.15, 0.14);
+    timberBeam(parent, [0, baseY + 0.08, z], [0, baseY + rise - 0.08, z], 0.14, 0.14);
+  }
+  box(parent, [0.2, 0.22, depth + 0.34], 0x7b5038, [-width / 2, baseY, 0]);
+  box(parent, [0.2, 0.22, depth + 0.34], 0x7b5038, [width / 2, baseY, 0]);
+  return roof;
+}
+
+function createWindowPlanter(
+  parent: THREE.Object3D,
+  x: number,
+  y: number,
+  z: number,
+  width = 1.1,
+): void {
+  const planter = box(parent, [width, 0.3, 0.38], 0xa96542, [x, y, z]);
+  planter.material = patternedMaterial(0xa96542, "wood", { roughness: 0.8 });
+  box(parent, [width - 0.12, 0.07, 0.29], 0x574b35, [x, y + 0.18, z]);
+  for (const [offset, color] of [
+    [-0.34, 0xf37988],
+    [0, 0xffcf55],
+    [0.34, 0x8d7bd2],
+  ] as const) {
+    sphere(parent, 0.13, COLORS.leafDark, [x + offset, y + 0.31, z], [1.15, 0.8, 0.8]);
+    sphere(parent, 0.085, color, [x + offset, y + 0.43, z + 0.035], [1.1, 0.68, 0.7]);
+  }
+}
+
+function addStoneFoundationFace(
+  parent: THREE.Object3D,
+  width: number,
+  z: number,
+  y = 0.36,
+): void {
+  const count = Math.max(5, Math.floor(width / 0.52));
+  for (let index = 0; index < count; index += 1) {
+    const segmentWidth = width / count - 0.025;
+    const x = -width / 2 + segmentWidth / 2 + index * (width / count);
+    const height = 0.32 + (index % 3) * 0.07;
+    box(
+      parent,
+      [segmentWidth, height, 0.08],
+      index % 2 === 0 ? 0xc8c2b4 : 0xadaea7,
+      [x, y + (height - 0.32) / 2, z],
+    ).castShadow = false;
+  }
+}
+
 function addWindow(
   parent: THREE.Object3D,
   x: number,
@@ -644,7 +796,7 @@ function addWindow(
 ): void {
   // A dark recess and warm inner panel make the window read as a real opening,
   // rather than a blue sticker sitting on the facade.
-  box(parent, [width + 0.24, height + 0.24, 0.15], 0x5c6c6a, [x, y, z - 0.015]);
+  box(parent, [width + 0.26, height + 0.26, 0.15], 0x7c5b43, [x, y, z - 0.015]);
   const interior = addMesh(
     parent,
     new THREE.BoxGeometry(width - 0.08, height - 0.08, 0.035),
@@ -673,14 +825,14 @@ function addDoor(
   z: number,
   color: THREE.ColorRepresentation,
 ): void {
-  box(parent, [1.02, 2.04, 0.18], COLORS.white, [x, y, z]);
-  box(parent, [0.82, 1.86, 0.13], color, [x, y, z + 0.12]);
+  box(parent, [1.16, 2.55, 0.18], COLORS.white, [x, y, z]);
+  box(parent, [0.94, 2.33, 0.13], color, [x, y, z + 0.12]);
   // Four recessed panels break up the tall slab and better establish scale.
-  for (const panelY of [y - 0.46, y + 0.42]) {
-    box(parent, [0.57, 0.57, 0.035], 0x596e75, [x, panelY, z + 0.2]);
+  for (const panelY of [y - 0.57, y + 0.54]) {
+    box(parent, [0.66, 0.72, 0.035], 0x6c5948, [x, panelY, z + 0.2]);
   }
-  sphere(parent, 0.062, COLORS.gold, [x + 0.28, y, z + 0.23], [1, 1, 0.55]);
-  box(parent, [1.2, 0.16, 0.58], 0xdcbf89, [x, 0.12, z + 0.28]);
+  sphere(parent, 0.066, COLORS.gold, [x + 0.33, y, z + 0.23], [1, 1, 0.55]);
+  box(parent, [1.32, 0.16, 0.64], 0xd6c9b1, [x, 0.11, z + 0.28]);
 }
 
 function createHouse(
@@ -698,46 +850,58 @@ function createHouse(
   house.scale.setScalar(scale);
   parent.add(house);
 
-  const foundation = box(house, [4.04, 0.24, 3.08], 0xb8aa90, [0, 0.1, 0]);
+  const wallColor = new THREE.Color(bodyColor).lerp(new THREE.Color(0xfff4df), 0.84).getHex();
+  const tileColor = new THREE.Color(roofColor).lerp(new THREE.Color(0xd9694e), 0.82).getHex();
+  const foundation = box(house, [4.24, 0.62, 3.18], 0xb9b5aa, [0, 0.3, 0]);
+  foundation.material = patternedMaterial(0xb9b5aa, "paving", { roughness: 0.98 });
   foundation.receiveShadow = true;
-  const body = box(house, [3.86, 3.35, 2.9], bodyColor, [0, 1.78, 0]);
-  body.material = patternedMaterial(bodyColor, "stucco", { roughness: 0.9 });
-  addEdges(body, COLORS.ink, 0.08, 42);
-  const lowerBand = box(house, [3.98, 0.32, 3.02], 0xf3c98d, [0, 0.34, 0]);
-  addEdges(lowerBand, COLORS.ink, 0.08, 44);
-  const roof = addMesh(
-    house,
-    gableRoofGeometry(4.56, 3.55, 1.5),
-    patternedMaterial(roofColor, "roof", { roughness: 0.76, side: THREE.DoubleSide }),
-    [0, 3.42, 0],
-  );
-  roof.castShadow = true;
-  addEdges(roof, COLORS.ink, 0.15, 24);
-  for (const front of [-1, 1]) {
-    box(house, [4.66, 0.15, 0.18], roofColor, [0, 3.4, front * 1.78]);
-  }
+  addStoneFoundationFace(house, 4.06, 1.635, 0.33);
+
+  const body = box(house, [4.06, 6.22, 3.02], wallColor, [0, 3.42, 0]);
+  body.material = patternedMaterial(wallColor, "stucco", { roughness: 0.94 });
+  addEdges(body, 0x8d745e, 0.065, 44);
+
+  const frontZ = 1.57;
+  const timber = 0x7e5238;
   for (const corner of [-1, 1]) {
-    box(house, [0.17, 3.02, 0.16], COLORS.cream, [corner * 1.84, 1.83, 1.48]);
+    box(house, [0.18, 6.02, 0.17], timber, [corner * 1.94, 3.5, frontZ]);
+    box(house, [0.18, 6.02, 0.17], timber, [corner * 1.94, 3.5, -frontZ]);
   }
+  for (const beamY of [0.72, 3.58, 6.36]) {
+    box(house, [3.94, 0.17, 0.17], timber, [0, beamY, frontZ]);
+  }
+  timberBeam(house, [-1.88, 3.65, frontZ + 0.02], [-0.74, 5.95, frontZ + 0.02], 0.13, 0.16, timber);
+  timberBeam(house, [1.88, 3.65, frontZ + 0.02], [0.74, 5.95, frontZ + 0.02], 0.13, 0.16, timber);
 
-  addDoor(house, 0, 1.04, 1.52, roofColor);
-  addWindow(house, -1.19, 2.25, 1.5);
-  addWindow(house, 1.19, 2.25, 1.5);
-  // A small porch canopy and posts give the entrance believable depth.
-  box(house, [1.48, 0.13, 0.82], roofColor, [0, 2.3, 1.84], [-0.06, 0, 0]);
-  for (const postX of [-0.62, 0.62]) {
-    box(house, [0.09, 1.12, 0.09], COLORS.cream, [postX, 1.7, 2.1]);
-  }
-  box(house, [0.34, 1.4, 0.36], 0x875440, [1.22, 4.32, -0.45]);
-  box(house, [0.55, 0.18, 0.58], 0x63443a, [1.22, 5.02, -0.45]);
+  createTiledGableRoof(house, 4.72, 3.62, 2.82, 6.48, tileColor, wallColor);
 
-  const planter = box(house, [1.1, 0.28, 0.34], 0xb86d4f, [-1.19, 1.54, 1.7]);
-  planter.userData.decorative = true;
-  for (const offset of [-0.34, 0, 0.34]) {
-    sphere(house, 0.16, offset === 0 ? 0xffdd5e : 0xf47c91, [-1.19 + offset, 1.78, 1.72]);
+  addDoor(house, 0, 1.51, 1.62, tileColor);
+  addWindow(house, -1.28, 2.12, 1.6, 0.76, 1.05);
+  addWindow(house, 1.28, 2.12, 1.6, 0.76, 1.05);
+  addWindow(house, -1.1, 5.08, 1.6, 0.86, 1.12);
+  addWindow(house, 1.1, 5.08, 1.6, 0.86, 1.12);
+  createWindowPlanter(house, -1.1, 4.28, 1.82, 1.15);
+  createWindowPlanter(house, 1.1, 4.28, 1.82, 1.15);
+
+  const sideFacade = new THREE.Group();
+  sideFacade.position.x = 2.04;
+  sideFacade.rotation.y = Math.PI / 2;
+  house.add(sideFacade);
+  addWindow(sideFacade, 0.25, 4.72, 0, 0.82, 1.04);
+
+  // A tiled porch, substantial posts and a stone step establish human scale.
+  const porchRoof = box(house, [1.76, 0.18, 0.96], tileColor, [0, 2.98, 1.98], [-0.08, 0, 0]);
+  porchRoof.material = patternedMaterial(tileColor, "roof", { roughness: 0.8 });
+  for (const postX of [-0.75, 0.75]) {
+    box(house, [0.11, 2.48, 0.11], timber, [postX, 1.64, 2.22]);
   }
+  box(house, [1.58, 0.17, 0.72], 0xcac4b5, [0, 0.14, 1.96]);
+
+  box(house, [0.42, 1.72, 0.4], 0x9a6047, [1.3, 7.88, -0.45]);
+  box(house, [0.6, 0.2, 0.6], 0x754737, [1.3, 8.77, -0.45]);
 
   house.userData.kind = "house";
+  house.userData.height = 9.35 * scale;
   return house;
 }
 
@@ -778,40 +942,57 @@ function createCafe(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   cafe.position.set(x, 0, z);
   parent.add(cafe);
 
-  const cafeFoundation = box(cafe, [5.45, 0.24, 3.68], 0xb7a98c, [0, 0.1, 0]);
+  const wallColor = 0xfff0d7;
+  const tileColor = 0xd66c50;
+  const timber = 0x765039;
+  const cafeFoundation = box(cafe, [5.62, 0.62, 3.78], 0xb9b6ad, [0, 0.3, 0]);
+  cafeFoundation.material = patternedMaterial(0xb9b6ad, "paving", { roughness: 0.98 });
   cafeFoundation.receiveShadow = true;
-  const cafeBody = box(cafe, [5.2, 3.72, 3.45], 0xf3ad76, [0, 1.92, 0]);
-  cafeBody.material = patternedMaterial(0xf3ad76, "stucco", { roughness: 0.9 });
-  addEdges(cafeBody, COLORS.ink, 0.08, 44);
-  box(cafe, [5.66, 0.42, 3.9], 0x4f9b86, [0, 3.9, 0]);
-  box(cafe, [5.42, 0.5, 0.34], COLORS.cream, [0, 3.37, 1.84]);
+  addStoneFoundationFace(cafe, 5.38, 1.94, 0.33);
+  const cafeBody = box(cafe, [5.4, 6.06, 3.55], wallColor, [0, 3.34, 0]);
+  cafeBody.material = patternedMaterial(wallColor, "stucco", { roughness: 0.94 });
+  addEdges(cafeBody, 0x8b725d, 0.065, 44);
+
+  const frontZ = 1.83;
   for (const corner of [-1, 1]) {
-    box(cafe, [0.18, 3.38, 0.18], COLORS.cream, [corner * 2.51, 1.93, 1.78]);
+    box(cafe, [0.19, 5.84, 0.18], timber, [corner * 2.6, 3.44, frontZ]);
+    box(cafe, [0.19, 5.84, 0.18], timber, [corner * 2.6, 3.44, -frontZ]);
   }
+  for (const beamY of [0.72, 3.52, 6.27]) {
+    box(cafe, [5.24, 0.18, 0.18], timber, [0, beamY, frontZ]);
+  }
+  createTiledGableRoof(cafe, 6.02, 4.05, 2.9, 6.34, tileColor, wallColor);
 
   for (let index = -2; index <= 2; index += 1) {
     box(
       cafe,
       [1.02, 0.13, 1.05],
-      index % 2 === 0 ? 0xf0685d : COLORS.white,
-      [index * 1.02, 3.07, 2.16],
+      index % 2 === 0 ? 0xd96855 : COLORS.white,
+      [index * 1.02, 3.1, 2.18],
       [-0.16, 0, 0],
       false,
     );
   }
 
-  addStorefrontWindow(cafe, -1.15, 1.88, 1.78, 2.65, 1.72, 3);
-  addDoor(cafe, 1.45, 1.04, 1.79, 0x398276);
+  addStorefrontWindow(cafe, -1.18, 1.94, 1.82, 2.7, 1.86, 3);
+  addDoor(cafe, 1.55, 1.51, 1.84, 0x4f8f77);
+  addWindow(cafe, -1.48, 4.84, 1.82, 1, 1.14);
+  addWindow(cafe, 1.22, 4.84, 1.82, 1, 1.14);
+  createWindowPlanter(cafe, -1.48, 4.02, 2.04, 1.28);
+  createWindowPlanter(cafe, 1.22, 4.02, 2.04, 1.28);
 
-  const sign = cylinder(cafe, 0.68, 0.68, 0.16, 20, COLORS.cream, [0, 4.34, 1.93]);
+  timberBeam(cafe, [-2.5, 3.68, frontZ + 0.02], [-1.78, 5.9, frontZ + 0.02], 0.14, 0.16, timber);
+  timberBeam(cafe, [2.5, 3.68, frontZ + 0.02], [1.78, 5.9, frontZ + 0.02], 0.14, 0.16, timber);
+
+  const sign = cylinder(cafe, 0.68, 0.68, 0.16, 20, COLORS.cream, [0, 5.62, 1.98]);
   sign.rotation.x = Math.PI / 2;
-  const cup = cylinder(cafe, 0.27, 0.22, 0.37, 12, 0x6e4536, [0, 4.33, 2.05], false);
+  const cup = cylinder(cafe, 0.27, 0.22, 0.37, 12, 0x6e4536, [0, 5.61, 2.1], false);
   cup.rotation.x = Math.PI / 2;
   const handle = addMesh(
     cafe,
     new THREE.TorusGeometry(0.2, 0.055, 8, 14, Math.PI * 1.5),
     toon(0x6e4536),
-    [0.3, 4.33, 2.09],
+    [0.3, 5.61, 2.14],
     [0, 0, -Math.PI / 2],
   );
   handle.castShadow = false;
@@ -820,13 +1001,14 @@ function createCafe(parent: THREE.Object3D, x: number, z: number): THREE.Group {
       cafe,
       new THREE.TorusGeometry(0.12, 0.022, 6, 12, Math.PI),
       toon(0xffffff),
-      [sx, 4.67 + sx * 0.22, 2.1],
+      [sx, 5.95 + sx * 0.22, 2.15],
       [0, 0, sx > 0.1 ? 0.1 : -0.12],
     );
     steam.castShadow = false;
   }
 
-  const terrace = box(cafe, [5.8, 0.14, 2.05], 0xe2b976, [0, 0.08, 2.55]);
+  const terrace = box(cafe, [5.9, 0.14, 2.05], COLORS.pavingLight, [0, 0.08, 2.55]);
+  terrace.material = patternedMaterial(COLORS.pavingLight, "paving", { roughness: 0.98 });
   terrace.receiveShadow = true;
   for (const tableX of [-1.5, 1.5]) {
     cylinder(cafe, 0.62, 0.62, 0.12, 16, 0xfaf1d0, [tableX, 0.9, 2.7]);
@@ -836,6 +1018,7 @@ function createCafe(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   }
 
   cafe.userData.kind = "cafe";
+  cafe.userData.height = 9.28;
   return cafe;
 }
 
@@ -844,48 +1027,54 @@ function createShop(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   shop.position.set(x, 0, z);
   parent.add(shop);
 
-  const shopFoundation = box(shop, [5.02, 0.24, 3.48], 0xb7a98c, [0, 0.1, 0]);
+  const wallColor = 0xfff2d9;
+  const tileColor = 0xce664e;
+  const timber = 0x785039;
+  const shopFoundation = box(shop, [5.12, 0.62, 3.58], 0xb8b5ac, [0, 0.3, 0]);
+  shopFoundation.material = patternedMaterial(0xb8b5ac, "paving", { roughness: 0.98 });
   shopFoundation.receiveShadow = true;
-  const shopBody = box(shop, [4.8, 3.48, 3.25], 0xf4d36d, [0, 1.8, 0]);
-  shopBody.material = patternedMaterial(0xf4d36d, "stucco", { roughness: 0.9 });
-  addEdges(shopBody, COLORS.ink, 0.08, 44);
-  const roof = addMesh(
-    shop,
-    gableRoofGeometry(5.38, 3.78, 1.42),
-    patternedMaterial(0x7b71b9, "roof", { roughness: 0.76, side: THREE.DoubleSide }),
-    [0, 3.5, 0],
-  );
-  roof.castShadow = true;
-  addEdges(roof, COLORS.ink, 0.15, 24);
-  box(shop, [5.48, 0.16, 0.2], 0x6b5ca2, [0, 3.49, 1.9]);
+  addStoneFoundationFace(shop, 4.9, 1.84, 0.33);
+  const shopBody = box(shop, [4.9, 5.94, 3.36], wallColor, [0, 3.28, 0]);
+  shopBody.material = patternedMaterial(wallColor, "stucco", { roughness: 0.94 });
+  addEdges(shopBody, 0x8c735e, 0.065, 44);
+  const frontZ = 1.73;
   for (const corner of [-1, 1]) {
-    box(shop, [0.18, 3.12, 0.18], COLORS.cream, [corner * 2.31, 1.83, 1.69]);
+    box(shop, [0.18, 5.72, 0.18], timber, [corner * 2.35, 3.37, frontZ]);
+    box(shop, [0.18, 5.72, 0.18], timber, [corner * 2.35, 3.37, -frontZ]);
   }
+  for (const beamY of [0.72, 3.45, 6.15]) {
+    box(shop, [4.72, 0.18, 0.18], timber, [0, beamY, frontZ]);
+  }
+  createTiledGableRoof(shop, 5.52, 3.88, 2.95, 6.18, tileColor, wallColor);
 
-  box(shop, [4.62, 0.78, 0.22], 0x6b5ca2, [0, 3.03, 1.72]);
+  box(shop, [4.68, 0.72, 0.22], 0x6b8d78, [0, 3.06, 1.78]);
   for (const stripe of [-2, -1, 0, 1, 2]) {
     box(
       shop,
       [0.92, 0.15, 0.98],
-      stripe % 2 === 0 ? 0x7666af : COLORS.white,
-      [stripe * 0.92, 2.54, 2.05],
+      stripe % 2 === 0 ? 0x6f9b83 : COLORS.white,
+      [stripe * 0.92, 2.56, 2.05],
       [-0.17, 0, 0],
       false,
     );
   }
 
-  addStorefrontWindow(shop, -0.75, 1.58, 1.68, 2.65, 1.65, 2);
-  addDoor(shop, 1.48, 1.04, 1.68, 0x6b5ca2);
+  addStorefrontWindow(shop, -0.78, 1.88, 1.72, 2.65, 1.76, 2);
+  addDoor(shop, 1.5, 1.51, 1.74, 0x5d8f78);
+  addWindow(shop, -1.35, 4.76, 1.72, 0.94, 1.08);
+  addWindow(shop, 1.18, 4.76, 1.72, 0.94, 1.08);
+  createWindowPlanter(shop, -1.35, 3.98, 1.94, 1.2);
+  createWindowPlanter(shop, 1.18, 3.98, 1.94, 1.2);
 
-  const badge = cylinder(shop, 0.58, 0.58, 0.14, 6, COLORS.cream, [0, 4.04, 1.98]);
+  const badge = cylinder(shop, 0.58, 0.58, 0.14, 10, COLORS.cream, [0, 5.53, 1.94]);
   badge.rotation.x = Math.PI / 2;
-  const bag = box(shop, [0.5, 0.44, 0.1], 0xef7a6d, [0, 4, 2.08], [0, 0, 0], false);
+  const bag = box(shop, [0.5, 0.44, 0.1], 0xef7a6d, [0, 5.49, 2.04], [0, 0, 0], false);
   addEdges(bag, COLORS.ink, 0.14);
   const bagHandle = addMesh(
     shop,
     new THREE.TorusGeometry(0.17, 0.035, 6, 12, Math.PI),
     toon(0xef7a6d),
-    [0, 4.25, 2.09],
+    [0, 5.74, 2.05],
   );
   bagHandle.castShadow = false;
 
@@ -903,6 +1092,7 @@ function createShop(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   }
 
   shop.userData.kind = "shop";
+  shop.userData.height = 9.16;
   return shop;
 }
 
@@ -932,26 +1122,57 @@ function createTree(
   const crownData: ReadonlyArray<
     readonly [number, number, number, number, number, number, number, THREE.ColorRepresentation]
   > = [
-    [-0.58, 0.77, 0.08, 0.72, 1.04, 0.86, 0.8, COLORS.leaf],
-    [0.05, 0.94, -0.06, 0.86, 1.02, 0.9, 0.82, COLORS.leafLight],
-    [0.65, 0.66, -0.14, 0.72, 1.06, 0.82, 0.9, COLORS.leafDark],
-    [-0.08, 1.52, 0.06, 0.66, 0.94, 0.88, 0.82, 0x83d36d],
-    [-0.82, 1.26, -0.08, 0.54, 0.96, 0.84, 0.86, COLORS.leafDark],
-    [0.72, 1.28, 0.16, 0.55, 0.94, 0.86, 0.82, COLORS.leaf],
-    [0.08, 0.58, 0.45, 0.58, 1.04, 0.78, 0.86, COLORS.leafLight],
+    [-0.46, 0.92, 0.02, 0.92, 1.04, 0.96, 0.94, COLORS.leaf],
+    [0.48, 0.9, -0.08, 0.9, 1.02, 0.98, 0.94, COLORS.leafLight],
+    [0, 1.5, -0.02, 0.94, 1.02, 1, 0.96, 0x83d36d],
+    [0.02, 0.76, 0.48, 0.74, 1.08, 0.9, 0.86, COLORS.leafDark],
   ];
   crownData.forEach(([cx, cy, cz, radius, sx, sy, sz, color], index) => {
     const leaves = addMesh(
       root,
-      new THREE.IcosahedronGeometry(radius, 1),
-      toon(color, { roughness: 0.76 }),
+      new THREE.SphereGeometry(radius, 16, 10),
+      toon(color, { map: null, roughness: 0.8 }),
       [cx, cy, cz],
-      [phase * 0.17 + index * 0.21, index * 0.42, phase * 0.09 - index * 0.08],
+      [phase * 0.035, index * 0.17, phase * 0.025 - index * 0.03],
     );
     leaves.scale.set(sx, sy, sz);
-    leaves.castShadow = index < 4;
+    leaves.castShadow = index < 3;
     leaves.receiveShadow = false;
   });
+
+  // Fine leaf puffs are instanced: the crown gains a hand-pruned silhouette
+  // and small-scale detail for one draw call instead of dozens of meshes.
+  const leafCount = 26;
+  const leafPuffs = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(0.14, 1),
+    toon(0x68bf62, {
+      roughness: 0.82,
+    }),
+    leafCount,
+  );
+  leafPuffs.name = "Small leaf clusters";
+  leafPuffs.castShadow = false;
+  leafPuffs.receiveShadow = false;
+  const leafMatrix = new THREE.Matrix4();
+  const leafRotation = new THREE.Quaternion();
+  const leafScale = new THREE.Vector3();
+  for (let index = 0; index < leafCount; index += 1) {
+    const vertical = 1 - (2 * (index + 0.5)) / leafCount;
+    const radial = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+    const angle = index * 2.399963 + phase;
+    const position = new THREE.Vector3(
+      Math.cos(angle) * radial * 1.16,
+      1.15 + vertical * 1.02,
+      0.08 + Math.sin(angle) * radial * 0.96,
+    );
+    leafRotation.setFromEuler(new THREE.Euler(angle * 0.2, angle, vertical * 0.18));
+    const variation = 0.82 + (index % 5) * 0.055;
+    leafScale.set(variation * 1.16, variation * 0.78, variation * 0.94);
+    leafMatrix.compose(position, leafRotation, leafScale);
+    leafPuffs.setMatrixAt(index, leafMatrix);
+  }
+  leafPuffs.instanceMatrix.needsUpdate = true;
+  root.add(leafPuffs);
   crowns.push({ group: root, phase });
   return tree;
 }
@@ -992,28 +1213,67 @@ function createFlowerPatch(
   seed: number,
 ): void {
   const flowerColors = [0xff6f91, 0xffd45f, 0xf7f2ff, 0x8b78d0, 0xf48a62];
+  const stems = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.018, 0.025, 0.28, 5),
+    toon(COLORS.grassDark, { roughness: 0.96 }),
+    count,
+  );
+  const petals = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.075, 8, 5),
+    // Instanced colors are multiplied separately by Three.js. Enabling the
+    // geometry vertex-color path without a color attribute rendered petals
+    // as black on some WebGL implementations.
+    toon(0xffffff, { roughness: 0.8 }),
+    count * 5,
+  );
+  const centers = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.055, 8, 5),
+    toon(COLORS.gold, { roughness: 0.72 }),
+    count,
+  );
+  stems.name = "Flower stems";
+  petals.name = "Flower petals";
+  centers.name = "Flower centers";
+  stems.castShadow = false;
+  petals.castShadow = false;
+  centers.castShadow = false;
+  const matrix = new THREE.Matrix4();
+  const rotation = new THREE.Quaternion();
+  const stemScale = new THREE.Vector3(1, 1, 1);
+  const petalScale = new THREE.Vector3(1.2, 0.55, 1);
+  let petalIndex = 0;
   for (let index = 0; index < count; index += 1) {
     const angle = index * 2.399 + seed;
     const distance = 0.3 + ((index * 47 + seed * 31) % 17) * 0.075;
     const x = centerX + Math.cos(angle) * distance;
     const z = centerZ + Math.sin(angle) * distance * 0.7;
-    cylinder(parent, 0.018, 0.025, 0.28, 5, COLORS.grassDark, [x, 0.2, z], false);
-    const flower = new THREE.Group();
-    flower.position.set(x, 0.38 + (index % 3) * 0.035, z);
-    parent.add(flower);
+    const blossomY = 0.38 + (index % 3) * 0.035;
+    matrix.compose(new THREE.Vector3(x, 0.2, z), rotation, stemScale);
+    stems.setMatrixAt(index, matrix);
     const color = flowerColors[(index + seed) % flowerColors.length];
     for (let petal = 0; petal < 5; petal += 1) {
       const petalAngle = (petal / 5) * Math.PI * 2;
-      sphere(
-        flower,
-        0.075,
-        color,
-        [Math.cos(petalAngle) * 0.09, 0, Math.sin(petalAngle) * 0.09],
-        [1.2, 0.55, 1],
+      matrix.compose(
+        new THREE.Vector3(
+          x + Math.cos(petalAngle) * 0.09,
+          blossomY,
+          z + Math.sin(petalAngle) * 0.09,
+        ),
+        rotation,
+        petalScale,
       );
+      petals.setMatrixAt(petalIndex, matrix);
+      petals.setColorAt(petalIndex, new THREE.Color(color));
+      petalIndex += 1;
     }
-    sphere(flower, 0.055, COLORS.gold, [0, 0.025, 0]);
+    matrix.compose(new THREE.Vector3(x, blossomY + 0.025, z), rotation, stemScale);
+    centers.setMatrixAt(index, matrix);
   }
+  stems.instanceMatrix.needsUpdate = true;
+  petals.instanceMatrix.needsUpdate = true;
+  centers.instanceMatrix.needsUpdate = true;
+  if (petals.instanceColor) petals.instanceColor.needsUpdate = true;
+  parent.add(stems, petals, centers);
 }
 
 function createBench(
@@ -1110,38 +1370,77 @@ function createFountain(parent: THREE.Object3D, x: number, z: number, droplets: 
 }
 
 function createRoadNetwork(parent: THREE.Object3D): void {
-  const roadMaterial = toon(COLORS.road, { roughness: 1 });
-  const roadVertical = addMesh(parent, new THREE.BoxGeometry(5.7, 0.045, 46), roadMaterial, [1, 0.015, 0]);
-  const roadHorizontal = addMesh(parent, new THREE.BoxGeometry(46, 0.045, 5.7), roadMaterial, [0, 0.018, 2]);
+  const pathMaterial = patternedMaterial(0xe2ded2, "paving", { roughness: 0.99 });
+  const roadVertical = addMesh(parent, new THREE.BoxGeometry(5.9, 0.065, 46), pathMaterial, [1, 0.028, 0]);
+  const roadHorizontal = addMesh(parent, new THREE.BoxGeometry(46, 0.065, 5.9), pathMaterial, [0, 0.031, 2]);
   roadVertical.receiveShadow = true;
   roadHorizontal.receiveShadow = true;
 
-  box(parent, [0.38, 0.075, 46], COLORS.pavingLight, [-2.05, 0.055, 0], [0, 0, 0], false);
-  box(parent, [0.38, 0.075, 46], COLORS.pavingLight, [4.05, 0.055, 0], [0, 0, 0], false);
-  box(parent, [46, 0.075, 0.38], COLORS.pavingLight, [0, 0.055, -1.05], [0, 0, 0], false);
-  box(parent, [46, 0.075, 0.38], COLORS.pavingLight, [0, 0.055, 5.05], [0, 0, 0], false);
-
-  for (let z = -20; z <= 20; z += 3.2) {
-    box(parent, [0.14, 0.018, 1.42], COLORS.cream, [1, 0.05, z], [0, 0, 0], false);
+  // Low irregular-coloured curbs frame a pedestrian lane without road paint,
+  // zebra crossings or the visual weight of asphalt.
+  for (const x of [-2.08, 4.08]) {
+    const curb = box(parent, [0.28, 0.13, 46], x < 0 ? 0xbcb8ae : 0xcac5b9, [x, 0.075, 0]);
+    curb.material = patternedMaterial(x < 0 ? 0xbcb8ae : 0xcac5b9, "paving", { roughness: 1 });
   }
-  for (let x = -20; x <= 20; x += 3.2) {
-    box(parent, [1.42, 0.018, 0.14], COLORS.cream, [x, 0.052, 2], [0, 0, 0], false);
+  for (const z of [-1.08, 5.08]) {
+    const curb = box(parent, [46, 0.13, 0.28], z < 0 ? 0xc8c3b7 : 0xbab6ad, [0, 0.075, z]);
+    curb.material = patternedMaterial(z < 0 ? 0xc8c3b7 : 0xbab6ad, "paving", { roughness: 1 });
   }
 
-  for (let stripe = -2; stripe <= 2; stripe += 1) {
-    box(parent, [0.48, 0.018, 2.3], COLORS.white, [-0.35 + stripe * 0.68, 0.055, -0.1], [0, 0, 0], false);
-    box(parent, [2.3, 0.018, 0.48], COLORS.white, [5.2, 0.055, 0.65 + stripe * 0.68], [0, 0, 0], false);
+  const crossing = addMesh(
+    parent,
+    new THREE.CircleGeometry(4.05, 32),
+    patternedMaterial(0xeee8dc, "paving", { roughness: 1, side: THREE.DoubleSide }),
+    [1, 0.071, 2],
+    [-Math.PI / 2, 0, 0],
+  );
+  crossing.receiveShadow = true;
+
+  // A broad, pale stone forecourt places residents on a readable pedestrian
+  // stage in front of the home instead of scattering them through the lawn.
+  const homeCourtyard = addMesh(
+    parent,
+    new THREE.CircleGeometry(3.7, 40),
+    patternedMaterial(0xeee8dc, "paving", { roughness: 1, side: THREE.DoubleSide }),
+    [-6.4, 0.07, 7.05],
+    [-Math.PI / 2, 0, 0],
+  );
+  homeCourtyard.scale.y = 0.68;
+  homeCourtyard.receiveShadow = true;
+  const foregroundCourtyard = addMesh(
+    parent,
+    new THREE.CircleGeometry(3.45, 40),
+    patternedMaterial(0xeee8dc, "paving", { roughness: 1, side: THREE.DoubleSide }),
+    [-3.9, 0.071, 10.15],
+    [-Math.PI / 2, 0, 0],
+  );
+  foregroundCourtyard.scale.y = 0.68;
+  foregroundCourtyard.receiveShadow = true;
+
+  const doorstepPaths: ReadonlyArray<
+    readonly [number, number, number, number, number]
+  > = [
+    [-9.8, 3.72, 3, 1.3, 0],
+    [7.9, -0.42, 1.35, 1.45, 0],
+    [8.4, 7.12, 4, 1.35, 0],
+  ];
+  for (const [x, z, length, width, yaw] of doorstepPaths) {
+    const path = box(parent, [width, 0.055, length], 0xeee6d5, [x, 0.055, z], [0, yaw, 0]);
+    path.material = patternedMaterial(0xeee6d5, "paving", { roughness: 1 });
+    path.receiveShadow = true;
   }
 }
 
 function createPlaza(parent: THREE.Object3D, droplets: JetDrop[]): void {
-  cylinder(parent, 7.25, 7.25, 0.18, 32, COLORS.paving, [-7.7, 0.12, -5.2]);
-  cylinder(parent, 6.1, 6.1, 0.06, 32, 0xf9dca6, [-7.7, 0.24, -5.2], false);
+  const plazaBase = cylinder(parent, 7.25, 7.25, 0.18, 40, COLORS.paving, [-7.7, 0.12, -5.2]);
+  plazaBase.material = patternedMaterial(COLORS.paving, "paving", { roughness: 1 });
+  const plazaInset = cylinder(parent, 6.1, 6.1, 0.06, 40, 0xeee6d6, [-7.7, 0.24, -5.2], false);
+  plazaInset.material = patternedMaterial(0xeee6d6, "paving", { roughness: 1 });
   for (let ring = 0; ring < 3; ring += 1) {
     const ringMesh = addMesh(
       parent,
-      new THREE.TorusGeometry(3.1 + ring * 1.15, 0.07, 5, 32),
-      toon(ring % 2 === 0 ? 0xd6b57d : 0xefc989),
+      new THREE.TorusGeometry(3.1 + ring * 1.15, 0.042, 5, 40),
+      toon(ring % 2 === 0 ? 0xc6bca9 : 0xd9ceba, { roughness: 1 }),
       [-7.7, 0.3, -5.2],
       [Math.PI / 2, 0, 0],
     );
@@ -1154,7 +1453,7 @@ function createParkPond(parent: THREE.Object3D): void {
   const pond = addMesh(
     parent,
     new THREE.CylinderGeometry(2.7, 2.95, 0.18, 28),
-    waterMaterial(0x49b7d3),
+    waterMaterial(0x63d5f0),
     [-8.5, 0.17, 10.2],
   );
   pond.scale.z = 0.68;
@@ -1189,8 +1488,8 @@ function canalShape(widthOffset = 0): THREE.Shape {
     const progress = index / samples;
     const z = -20.5 + progress * 41;
     const drift = Math.sin(progress * Math.PI * 3.2) * 0.55 + Math.sin(progress * 9.7) * 0.18;
-    left.push([-26 + drift - widthOffset, -z]);
-    right.push([-20.8 + drift * 0.72 + widthOffset, -z]);
+    left.push([-25.8 + drift - widthOffset, -z]);
+    right.push([-20.2 + drift * 0.72 + widthOffset, -z]);
   }
   shape.moveTo(...left[0]);
   for (let index = 1; index < left.length; index += 1) shape.lineTo(...left[index]);
@@ -1202,9 +1501,9 @@ function canalShape(widthOffset = 0): THREE.Shape {
 function createCanal(parent: THREE.Object3D): THREE.Mesh {
   const bank = addMesh(
     parent,
-    new THREE.ShapeGeometry(canalShape(0.34), 4),
-    patternedMaterial(0xe3c892, "paving", { roughness: 0.98, side: THREE.DoubleSide }),
-    [0, 0.018, 0],
+    new THREE.ShapeGeometry(canalShape(0.58), 4),
+    patternedMaterial(0xc8c1b2, "paving", { roughness: 1, side: THREE.DoubleSide }),
+    [0, 0.025, 0],
     [-Math.PI / 2, 0, 0],
   );
   bank.receiveShadow = true;
@@ -1212,53 +1511,133 @@ function createCanal(parent: THREE.Object3D): THREE.Mesh {
   const water = addMesh(
     parent,
     new THREE.ShapeGeometry(canalShape(), 4),
-    waterMaterial(0x49bddb),
-    [0, 0.055, 0],
+    waterMaterial(0x65d9f5),
+    [0, 0.062, 0],
     [-Math.PI / 2, 0, 0],
   );
   water.name = "Animated canal water";
   water.renderOrder = 1;
 
-  // Irregular edge stones and reeds make the shore read as layered terrain.
-  for (let index = 0; index < 20; index += 1) {
-    const z = -18.5 + index * 1.95;
-    const x = -20.55 + Math.sin(index * 0.93) * 0.43;
-    const stone = sphere(
+  // Both banks use instanced irregular stones, giving a readable shoreline
+  // while keeping the full river edge to one draw call.
+  const stoneCount = 46;
+  const stones = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.3, 10, 6),
+    toon(0xffffff, {
+      map: surfaceTexture("paving"),
+      roughness: 1,
+    }),
+    stoneCount,
+  );
+  stones.name = "Canal stone banks";
+  stones.castShadow = false;
+  stones.receiveShadow = true;
+  const stoneMatrix = new THREE.Matrix4();
+  const stoneRotation = new THREE.Quaternion();
+  const stoneScale = new THREE.Vector3();
+  const bankColors = [0xb7b3aa, 0xd0c9ba, 0xa9aaa5, 0xdcd3c2];
+  for (let index = 0; index < stoneCount; index += 1) {
+    const side = index % 2 === 0 ? -1 : 1;
+    const sequence = Math.floor(index / 2);
+    const progress = sequence / (stoneCount / 2 - 1);
+    const z = -19.5 + progress * 39;
+    const drift = Math.sin(progress * Math.PI * 3.2) * 0.55 + Math.sin(progress * 9.7) * 0.18;
+    const x = side < 0 ? -26.08 + drift : -19.92 + drift * 0.72;
+    stoneRotation.setFromEuler(new THREE.Euler(index * 0.13, index * 0.47, index * 0.09));
+    const variation = 0.86 + (index % 4) * 0.08;
+    stoneScale.set(1.28 * variation, 0.52 + (index % 3) * 0.06, 0.9 * variation);
+    stoneMatrix.compose(new THREE.Vector3(x, 0.18, z), stoneRotation, stoneScale);
+    stones.setMatrixAt(index, stoneMatrix);
+    stones.setColorAt(index, new THREE.Color(bankColors[index % bankColors.length]));
+  }
+  stones.instanceMatrix.needsUpdate = true;
+  if (stones.instanceColor) stones.instanceColor.needsUpdate = true;
+  parent.add(stones);
+
+  const reedCount = 34;
+  const reeds = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.018, 0.028, 0.62, 5),
+    toon(0x73a74e, { roughness: 1 }),
+    reedCount,
+  );
+  reeds.castShadow = false;
+  reeds.receiveShadow = false;
+  const reedMatrix = new THREE.Matrix4();
+  const reedRotation = new THREE.Quaternion();
+  const reedScale = new THREE.Vector3();
+  for (let index = 0; index < reedCount; index += 1) {
+    const progress = index / (reedCount - 1);
+    const z = -18.7 + progress * 37.4 + Math.sin(index * 1.7) * 0.22;
+    const drift = Math.sin(progress * Math.PI * 3.2) * 0.55 + Math.sin(progress * 9.7) * 0.18;
+    const side = index % 4 === 0 ? -1 : 1;
+    const x = side < 0 ? -25.55 + drift : -20.42 + drift * 0.72;
+    reedRotation.setFromEuler(new THREE.Euler(0, index * 0.4, Math.sin(index) * 0.08));
+    const height = 0.75 + (index % 4) * 0.08;
+    reedScale.set(1, height, 1);
+    reedMatrix.compose(new THREE.Vector3(x, 0.31 * height, z), reedRotation, reedScale);
+    reeds.setMatrixAt(index, reedMatrix);
+  }
+  reeds.instanceMatrix.needsUpdate = true;
+  parent.add(reeds);
+
+  const mooringPosts: THREE.Vector3[] = [];
+  for (let index = 0; index < 8; index += 1) {
+    const progress = index / 7;
+    const z = -17.5 + progress * 35;
+    const drift = Math.sin(progress * Math.PI * 3.2) * 0.55 + Math.sin(progress * 9.7) * 0.18;
+    const x = -19.7 + drift * 0.72;
+    cylinder(parent, 0.09, 0.12, 1.15, 9, 0x755038, [x, 0.58, z]);
+    sphere(parent, 0.13, 0x8c6244, [x, 1.17, z], [1, 0.55, 1]).castShadow = false;
+    mooringPosts.push(new THREE.Vector3(x, 1.03, z));
+  }
+  for (let index = 0; index < mooringPosts.length - 1; index += 1) {
+    const start = mooringPosts[index];
+    const end = mooringPosts[index + 1];
+    const middle = start.clone().lerp(end, 0.5);
+    middle.y -= 0.34;
+    const rope = addMesh(
       parent,
-      0.29 + (index % 3) * 0.035,
-      index % 2 === 0 ? 0xc9b890 : 0xe0ca9d,
-      [x, 0.16, z],
-      [1.35, 0.55, 0.9],
+      new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3([start, middle, end]),
+        10,
+        0.025,
+        5,
+        false,
+      ),
+      toon(0xaa8555, { roughness: 1 }),
     );
-    stone.castShadow = index % 3 === 0;
-    if (index % 2 === 0) {
-      for (let reed = 0; reed < 3; reed += 1) {
-        const stalk = cylinder(
-          parent,
-          0.018,
-          0.028,
-          0.54 + reed * 0.07,
-          5,
-          reed === 1 ? 0x6e9e4b : 0x83ae52,
-          [x + 0.26 + reed * 0.08, 0.36 + reed * 0.035, z + (reed - 1) * 0.11],
-        );
-        stalk.rotation.z = (reed - 1) * 0.08;
-      }
-    }
+    rope.castShadow = false;
   }
 
   const boardwalk = new THREE.Group();
-  boardwalk.position.set(-20.45, 0.22, -6.5);
+  boardwalk.position.set(-23, 0.22, -6.5);
   boardwalk.rotation.y = -0.03;
   parent.add(boardwalk);
-  for (let plank = -5; plank <= 5; plank += 1) {
-    box(boardwalk, [0.42, 0.11, 2.45], 0xa96e48, [plank * 0.43, 0, 0]);
+  const plankCount = 15;
+  const planks = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(0.43, 0.12, 2.45),
+    patternedMaterial(0xa96e48, "wood", { roughness: 0.8 }),
+    plankCount,
+  );
+  planks.castShadow = true;
+  planks.receiveShadow = true;
+  const plankMatrix = new THREE.Matrix4();
+  const plankRotation = new THREE.Quaternion();
+  const plankScale = new THREE.Vector3(1, 1, 1);
+  for (let index = 0; index < plankCount; index += 1) {
+    const normalized = (index - (plankCount - 1) / 2) / ((plankCount - 1) / 2);
+    const px = (index - (plankCount - 1) / 2) * 0.44;
+    const py = 0.06 + Math.cos(normalized * Math.PI * 0.5) * 0.3;
+    plankMatrix.compose(new THREE.Vector3(px, py, 0), plankRotation, plankScale);
+    planks.setMatrixAt(index, plankMatrix);
   }
+  planks.instanceMatrix.needsUpdate = true;
+  boardwalk.add(planks);
   for (const side of [-1, 1]) {
-    for (const x of [-2.15, -1.05, 0, 1.05, 2.15]) {
+    for (const x of [-3, -2, -1, 0, 1, 2, 3]) {
       cylinder(boardwalk, 0.045, 0.055, 0.78, 7, COLORS.darkWood, [x, 0.41, side * 1.08]);
     }
-    box(boardwalk, [4.7, 0.07, 0.07], COLORS.darkWood, [0, 0.78, side * 1.08]);
+    box(boardwalk, [6.45, 0.08, 0.08], COLORS.darkWood, [0, 0.8, side * 1.08]);
   }
   return water;
 }
@@ -1386,7 +1765,7 @@ function createDistantScenery(parent: THREE.Object3D): THREE.Group[] {
     hill.receiveShadow = true;
   }
 
-  const skylineColors = [0xe8a970, 0xe2817c, 0x76b1a2, 0xd9b96c, 0x9b8ac5];
+  const skylineColors = [0xffeed6, 0xf8e5d4, 0xe7eee0, 0xf2e8cf, 0xeee4dc];
   for (let index = 0; index < 11; index += 1) {
     const angle = Math.PI * (1.04 + index * 0.087);
     const distance = 19 + (index % 3) * 1.1;
@@ -1396,15 +1775,29 @@ function createDistantScenery(parent: THREE.Object3D): THREE.Group[] {
     building.position.set(x, 0, z);
     building.rotation.y = -angle + Math.PI / 2;
     background.add(building);
-    box(building, [2.25, 2.2 + (index % 3) * 0.4, 1.75], skylineColors[index % skylineColors.length], [0, 1.1, 0]);
+    const distantHeight = 3.1 + (index % 3) * 0.48;
+    const distantBody = box(
+      building,
+      [2.25, distantHeight, 1.75],
+      skylineColors[index % skylineColors.length],
+      [0, distantHeight / 2, 0],
+    );
+    distantBody.material = patternedMaterial(skylineColors[index % skylineColors.length], "stucco", {
+      roughness: 0.95,
+    });
     const roof = addMesh(
       building,
       gableRoofGeometry(2.65, 2.05, 0.82),
-      toon(index % 2 === 0 ? 0xb85f54 : 0x5d7589, { side: THREE.DoubleSide }),
-      [0, 2.2 + (index % 3) * 0.4, 0],
+      patternedMaterial(index % 2 === 0 ? 0xc7614d : 0xd47755, "roof", {
+        roughness: 0.82,
+        side: THREE.DoubleSide,
+      }),
+      [0, distantHeight, 0],
     );
-    addEdges(roof, COLORS.ink, 0.08, 34);
-    box(building, [0.45, 0.58, 0.06], 0x8ed5e1, [0, 1.4, 0.91], [0, 0, 0], false);
+    addEdges(roof, 0x81513e, 0.07, 34);
+    box(building, [0.12, distantHeight - 0.3, 0.08], 0x7b543d, [0, distantHeight / 2, 0.91]);
+    box(building, [2.08, 0.12, 0.08], 0x7b543d, [0, distantHeight * 0.52, 0.91]);
+    box(building, [0.52, 0.68, 0.06], 0x8ed5e1, [0.62, 1.5, 0.91], [0, 0, 0], false);
   }
 
   const windmill = new THREE.Group();
@@ -1986,13 +2379,13 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   createParkPond(group);
   createGrassDetails(group);
 
-  createHouse(group, -9.8, 3.1, 0xf4a78b, 0xb95455, 0.04, 1.03);
-  createHouse(group, -15.2, 2.6, 0x8fc8b0, 0x577c7c, -0.03, 0.92);
-  createHouse(group, -15.2, -8.9, 0xf3cf79, 0xd46f55, 0.06, 0.96);
-  createHouse(group, -3.1, -12.6, 0x9fbbdc, 0x6c6aa5, -0.03, 0.9);
-  createHouse(group, 8.6, -10.5, 0xf3b3b7, 0x9b5a75, 0.05, 0.96);
-  createHouse(group, 14.7, -8.5, 0xf1c576, 0x4c8c85, -0.06, 0.9);
-  createHouse(group, 14.5, 9.8, 0x91c5b0, 0x517a72, Math.PI, 0.92);
+  createHouse(group, -9.8, 3.1, 0xf4d8cb, 0xb95455, 0.04, 1.08);
+  createHouse(group, -15.2, 2.6, 0xd8eadf, 0xc96950, -0.03, 1);
+  createHouse(group, -15.2, -8.9, 0xf2e4bf, 0xd46f55, 0.06, 1.02);
+  createHouse(group, -3.1, -12.6, 0xdde8f1, 0xc96350, -0.03, 1);
+  createHouse(group, 8.6, -10.5, 0xf1ddda, 0xcc6852, 0.05, 1.03);
+  createHouse(group, 14.7, -8.5, 0xf1e4c8, 0xc8644d, -0.06, 1);
+  createHouse(group, 14.5, 9.8, 0xdceade, 0xce6b51, Math.PI, 1);
   createCafe(group, 7.9, -2.2);
   createShop(group, 8.4, 7.65);
 
@@ -2005,10 +2398,10 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   createTownSign(group, -2.85, 6.25);
 
   const treeData: ReadonlyArray<readonly [number, number, number, number]> = [
-    [-12.2, 8.2, 1.05, 0.2],
-    [-5.2, 9.4, 0.9, 1.3],
-    [-12.7, 12.4, 0.94, 2.4],
-    [-4.7, 13.4, 1.1, 3.1],
+    [-13.5, 10.5, 0.96, 0.2],
+    [15, -15, 0.88, 1.3],
+    [-15.5, 12.7, 0.82, 2.4],
+    [18, -12.5, 0.85, 3.1],
     [-17.8, -3.6, 0.92, 0.7],
     [-12.5, -14.4, 1.08, 1.8],
     [5.7, -14.5, 0.94, 2.6],
@@ -2016,7 +2409,7 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
     [18.1, 5.8, 0.9, 0.9],
     [10.8, 14.3, 1.08, 2.1],
     [5.8, 12.3, 0.87, 3.8],
-    [-1.7, 16.4, 1.08, 1.1],
+    [-18, -12, 0.9, 1.1],
   ];
   for (const [x, z, scale, phase] of treeData) {
     createTree(group, treeCrowns, x, z, scale, phase);

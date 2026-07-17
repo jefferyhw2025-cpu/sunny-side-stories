@@ -287,3 +287,92 @@
   .style-picker button,
   .world-controls button { transition:none; }
 }
+
+/* Immersive world view: the same live scene, with the management chrome folded away. */
+.immersive-entry {
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  flex:none;
+  border:1px solid #d8e3e4;
+  border-radius:14px;
+  padding:10px 13px;
+  background:#f5fbfa;
+  color:#31495a;
+  box-shadow:0 3px 0 #cedcda;
+  font-size:12px;
+  font-weight:800;
+  transition:transform .18s,box-shadow .18s,background .18s;
+}
+.immersive-entry b { color:#299d8a; font-size:19px; line-height:1; }
+.immersive-entry:hover { transform:translateY(-2px); background:#fff; box-shadow:0 5px 0 #cedcda; }
+.immersive-entry:active { transform:translateY(1px); box-shadow:0 2px 0 #cedcda; }
+.immersive-exit { display:none; }
+
+.game-shell.immersive-mode {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:minmax(650px,100vh);
+  min-height:100vh;
+  background:#8bcdda;
+}
+.game-shell.immersive-mode>header,
+.game-shell.immersive-mode>.panel,
+.game-shell.immersive-mode>.story { display:none; }
+.game-shell.immersive-mode>.world {
+  grid-column:1/-1;
+  grid-row:1;
+  width:100%;
+  height:100vh;
+  min-height:650px;
+}
+.immersive-mode .immersive-exit {
+  position:absolute;
+  z-index:9;
+  top:22px;
+  left:22px;
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  border:1px solid rgba(255,255,255,.86);
+  border-radius:15px;
+  padding:10px 14px 10px 10px;
+  background:rgba(250,253,250,.88);
+  color:#314858;
+  box-shadow:0 7px 24px rgba(24,51,64,.22);
+  backdrop-filter:blur(15px);
+  font-size:12px;
+  font-weight:900;
+}
+.immersive-mode .immersive-exit span { display:grid; place-items:center; width:25px; height:25px; border-radius:50%; background:#2c465a; color:#fff; font-size:22px; line-height:1; }
+.immersive-mode .immersive-exit:hover { background:#fff; transform:translateY(-1px); }
+.immersive-mode .city-title { top:20px; left:190px; }
+.immersive-mode .world-controls { top:20px; right:20px; }
+.immersive-mode .places { left:8%; right:8%; bottom:22px; }
+.immersive-mode .scene-dialogue { left:24px; bottom:94px; }
+.immersive-entry:focus-visible,
+.immersive-exit:focus-visible { outline:3px solid #176a9b; outline-offset:3px; }
+
+@media (max-width:1050px) and (min-width:851px) {
+  .immersive-entry { width:43px; justify-content:center; padding:10px; }
+  .immersive-entry span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .immersive-mode .city-title { left:178px; }
+}
+
+@media (max-width:850px) {
+  .immersive-entry { display:none; }
+  .game-shell.immersive-mode { display:block; min-height:100vh; background:#fffaf0; }
+  .game-shell.immersive-mode>header { display:flex; }
+  .game-shell.immersive-mode>.panel { display:block; }
+  .game-shell.immersive-mode>.story { display:flex; }
+  .game-shell.immersive-mode>.world { width:auto; height:520px; min-height:0; }
+  .immersive-mode .immersive-exit { display:none; }
+  .immersive-mode .city-title { top:14px; left:14px; }
+  .immersive-mode .world-controls { top:78px; left:12px; right:12px; }
+  .immersive-mode .places { left:20px; right:20px; bottom:18px; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .immersive-entry,
+  .immersive-exit { transition:none; }
+}

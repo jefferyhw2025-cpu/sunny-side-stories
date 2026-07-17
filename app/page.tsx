@@ -130,6 +130,7 @@ export default function Home() {
   const [weatherMode, setWeatherMode] = useState<WeatherMode>("clear");
   const [storyLog, setStoryLog] = useState<string[]>(["欢迎来到晴天市！小满刚搬进了阳光街区。"]);
   const [saveReady, setSaveReady] = useState(false);
+  const [immersive, setImmersive] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [newSkin, setNewSkin] = useState("#efb18e");
@@ -177,16 +178,17 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [actionMoment]);
   useEffect(() => {
-    if (!showCreate && !dialogue) return;
+    if (!showCreate && !dialogue && !immersive) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setDialogue(null);
       setWorldAction(null);
       setShowCreate(false);
+      setImmersive(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [showCreate, dialogue]);
+  }, [showCreate, dialogue, immersive]);
 
   const person = people.find((candidate) => candidate.id === selected) || people[0];
   const activeScene = scenes.find((item) => item.id === scene) || scenes[0];
@@ -286,15 +288,17 @@ export default function Home() {
   }[weatherMode];
 
   return (
-    <main className="game-shell">
+    <main className={`game-shell ${immersive ? "immersive-mode" : ""}`}>
       <header>
         <div className="brand"><span className="sun-mark">☀</span><div><b>晴天生活</b><small>SUNNY SIDE STORIES</small></div></div>
         <div className="top-stats"><span>第 {day} 天</span><span>{weather.icon} {weather.label} · {atmosphere.label}</span><span className="coin">●</span><strong>{coins}</strong></div>
+        <button className="immersive-entry" type="button" aria-pressed={immersive} onClick={() => setImmersive(true)} aria-label="进入沉浸画面"><b>⛶</b><span>沉浸画面</span></button>
         <button className="next-day" onClick={nextDay}>度过一天 <span>›</span></button>
       </header>
 
       <section className={`world atmosphere-${timeOfDay} weather-${weatherMode}`} aria-label={`${activeScene.name}三维场景`}>
-        <World3D scene={scene} selectedId={person.id} residents={worldResidents} actionCue={worldAction} timeOfDay={timeOfDay} weatherMode={weatherMode} />
+        <World3D scene={scene} selectedId={person.id} residents={worldResidents} actionCue={worldAction} timeOfDay={timeOfDay} weatherMode={weatherMode} cinematicView={immersive} />
+        <button className="immersive-exit" type="button" onClick={() => setImmersive(false)} aria-label="退出沉浸画面并返回居民面板"><span>‹</span> 返回居民面板</button>
         <div className="city-title"><span>{activeScene.icon}</span><div><b>{activeScene.name}</b><small>{activeScene.hint}</small></div></div>
         <div className="world-controls" aria-label="场景环境设置">
           <div role="group" aria-label="时间"><span>时间</span>{(["day", "sunset", "night"] as TimeOfDay[]).map((value) => <button type="button" key={value} aria-pressed={timeOfDay === value} className={timeOfDay === value ? "active" : ""} onClick={() => setTimeOfDay(value)}>{value === "day" ? "☀ 白天" : value === "sunset" ? "◐ 黄昏" : "☾ 夜晚"}</button>)}</div>
