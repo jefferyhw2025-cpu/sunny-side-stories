@@ -299,17 +299,19 @@ function surfaceTexture(pattern: TexturePattern): THREE.Texture {
   const asset = AUTHORED_TEXTURE_ASSETS[pattern];
   if (typeof document === "undefined" || !asset) return proceduralTexture(pattern);
 
-  const texture = new THREE.TextureLoader().load(
-    new URL(asset, document.baseURI).href,
-    (loaded) => {
-      loaded.needsUpdate = true;
-    },
-    undefined,
-    () => {
-      // The material stays usable through its colour and roughness if an image
-      // request is blocked; scene creation must never fail because of texture IO.
-    },
-  );
+  // TextureLoader's empty texture samples as black until the network image is
+  // decoded. Start from a warm neutral pixel so first-time GitHub visitors see
+  // the material colour immediately, then replace it with the authored tile.
+  const placeholder = document.createElement("canvas");
+  placeholder.width = 1;
+  placeholder.height = 1;
+  const placeholderContext = placeholder.getContext("2d");
+  if (placeholderContext) {
+    placeholderContext.fillStyle = "#f4f1e8";
+    placeholderContext.fillRect(0, 0, 1, 1);
+  }
+  const texture = new THREE.Texture(placeholder);
+  texture.needsUpdate = true;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(...PATTERN_REPEAT[pattern]);
@@ -318,6 +320,18 @@ function surfaceTexture(pattern: TexturePattern): THREE.Texture {
   texture.userData.shared = true;
   texture.userData.pattern = pattern;
   sharedTextures.set(pattern, texture);
+  new THREE.ImageLoader().load(
+    new URL(asset, document.baseURI).href,
+    (image) => {
+      texture.image = image;
+      texture.needsUpdate = true;
+    },
+    undefined,
+    () => {
+      // Keep the neutral placeholder: material colour, roughness and geometry
+      // remain fully readable even if the authored tile cannot be downloaded.
+    },
+  );
   return texture;
 }
 
