@@ -79,7 +79,15 @@ export interface Character {
   animation: CharacterAnimation;
 }
 
-type ToonMaterial = THREE.MeshToonMaterial;
+type CharacterMaterial = THREE.MeshStandardMaterial;
+type SurfaceFinish = "skin" | "hair" | "fabric" | "leather" | "eye" | "detail";
+
+interface CharacterMaterialOptions {
+  side?: THREE.Side;
+  transparent?: boolean;
+  opacity?: number;
+  surface?: SurfaceFinish;
+}
 
 const FRONT = 0.01;
 const DEG = Math.PI / 180;
@@ -106,14 +114,56 @@ function shiftedColor(value: string, lightness: number, fallback: string): THREE
 
 function material(
   color: THREE.ColorRepresentation,
-  options: { side?: THREE.Side; transparent?: boolean; opacity?: number } = {},
-): ToonMaterial {
-  return new THREE.MeshToonMaterial({
+  options: CharacterMaterialOptions = {},
+): CharacterMaterial {
+  const base = {
     color,
     side: options.side ?? THREE.FrontSide,
     transparent: options.transparent ?? false,
     opacity: options.opacity ?? 1,
-  });
+    metalness: 0,
+  };
+
+  switch (options.surface ?? "detail") {
+    case "skin":
+      return new THREE.MeshPhysicalMaterial({
+        ...base,
+        roughness: 0.66,
+        clearcoat: 0.025,
+        clearcoatRoughness: 0.9,
+        sheen: 0.06,
+        sheenColor: color,
+        sheenRoughness: 0.94,
+      });
+    case "fabric":
+      return new THREE.MeshPhysicalMaterial({
+        ...base,
+        roughness: 0.9,
+        clearcoat: 0,
+        sheen: 0.14,
+        sheenColor: new THREE.Color(color).offsetHSL(0, 0, 0.08),
+        sheenRoughness: 0.86,
+      });
+    case "leather":
+      return new THREE.MeshPhysicalMaterial({
+        ...base,
+        roughness: 0.42,
+        clearcoat: 0.18,
+        clearcoatRoughness: 0.58,
+      });
+    case "eye":
+      return new THREE.MeshPhysicalMaterial({
+        ...base,
+        roughness: 0.16,
+        clearcoat: 0.72,
+        clearcoatRoughness: 0.2,
+      });
+    case "hair":
+      return new THREE.MeshStandardMaterial({ ...base, roughness: 0.4 });
+    case "detail":
+    default:
+      return new THREE.MeshStandardMaterial({ ...base, roughness: 0.74 });
+  }
 }
 
 function addMesh(
@@ -145,12 +195,12 @@ function createEye(
   parent: THREE.Object3D,
   x: number,
   style: string,
-  skinMaterial: ToonMaterial,
+  skinMaterial: CharacterMaterial,
 ): THREE.Group {
   const eye = joint(parent, x, 0.29, 0.535 + FRONT);
-  const dark = material("#243044");
-  const white = material("#fffdf7");
-  const iris = material("#4a6f82");
+  const dark = material("#243044", { surface: "eye" });
+  const white = material("#fffdf7", { surface: "eye" });
+  const iris = material("#4a6f82", { surface: "eye" });
 
   if (includesAny(style, ["sleep", "closed", "calm"])) {
     addMesh(eye, new THREE.BoxGeometry(0.16, 0.025, 0.018), dark, [0, 0, 0]);
@@ -186,7 +236,7 @@ function createBrow(
   parent: THREE.Object3D,
   x: number,
   style: string,
-  hairMaterial: ToonMaterial,
+  hairMaterial: CharacterMaterial,
 ): THREE.Group {
   const brow = joint(parent, x, 0.46, 0.552 + FRONT);
   const bold = includesAny(style, ["bold", "thick", "strong"]);
@@ -203,7 +253,7 @@ function createBrow(
   return brow;
 }
 
-function createNose(parent: THREE.Object3D, style: string, skinShadow: ToonMaterial): void {
+function createNose(parent: THREE.Object3D, style: string, skinShadow: CharacterMaterial): void {
   if (includesAny(style, ["point", "sharp", "long"])) {
     addMesh(
       parent,
@@ -216,15 +266,15 @@ function createNose(parent: THREE.Object3D, style: string, skinShadow: ToonMater
   } else if (includesAny(style, ["line", "small", "subtle"])) {
     addMesh(parent, new THREE.BoxGeometry(0.035, 0.105, 0.025), skinShadow, [0, 0.2, 0.577], [1, 1, 1], [0, 0, -5 * DEG]);
   } else {
-    addMesh(parent, new THREE.DodecahedronGeometry(0.062, 1), skinShadow, [0, 0.19, 0.578], [0.86, 0.72, 0.72]);
+    addMesh(parent, new THREE.SphereGeometry(0.062, 14, 10), skinShadow, [0, 0.19, 0.578], [0.86, 0.72, 0.72]);
   }
 }
 
 function createMouth(parent: THREE.Object3D, style: string): THREE.Group {
   const mouth = joint(parent, 0, 0.04, 0.574 + FRONT);
-  const lip = material("#9e4051");
-  const inside = material("#5a2734");
-  const teeth = material("#fff9ed");
+  const lip = material("#9e4051", { surface: "detail" });
+  const inside = material("#5a2734", { surface: "detail" });
+  const teeth = material("#fff9ed", { surface: "eye" });
 
   if (includesAny(style, ["grin", "big", "toothy"])) {
     addMesh(mouth, new THREE.CircleGeometry(0.12, 20), inside, [0, 0, 0], [1.35, 0.58, 1]);
@@ -252,8 +302,8 @@ function addHair(
   head: THREE.Group,
   profile: CharacterProfile,
   headScale: readonly [number, number, number],
-  hairMaterial: ToonMaterial,
-  hairHighlight: ToonMaterial,
+  hairMaterial: CharacterMaterial,
+  hairHighlight: CharacterMaterial,
 ): void {
   const requested = styleName(profile.hairStyle);
   const numericStyles: Record<string, string> = { "0": "crop", "1": "spikes", "2": "pigtails", "3": "bun" };
@@ -268,19 +318,50 @@ function addHair(
   );
   cap.name = "hair-cap";
 
+  const curled = includesAny(style, ["curl", "afro", "cloud"]);
+  if (!curled) {
+    // Separate locks give the hair a readable cut and part instead of one helmet-like cap.
+    const fringe: ReadonlyArray<readonly [number, number, number, number]> = [
+      [-0.36, 0.54, -8, 1.02],
+      [-0.14, 0.59, -3, 1.14],
+      [0.12, 0.58, 4, 1.1],
+      [0.35, 0.53, 9, 0.98],
+    ];
+    for (const [x, y, angle, width] of fringe) {
+      addMesh(
+        head,
+        new THREE.SphereGeometry(0.18, 18, 12),
+        x === -0.14 || x === 0.35 ? hairHighlight : hairMaterial,
+        [x * headScale[0], y, 0.505 * headScale[2]],
+        [width, 0.54, 0.38],
+        [0, 0, angle * DEG],
+      );
+    }
+    for (const side of [-1, 1]) {
+      addMesh(
+        head,
+        new THREE.SphereGeometry(0.155, 16, 10),
+        hairMaterial,
+        [side * 0.55 * headScale[0], 0.25, 0.31],
+        [0.5, 1.22, 0.52],
+        [0, 0, side * -7 * DEG],
+      );
+    }
+  }
+
   if (includesAny(style, ["bob", "page", "straight"])) {
     for (const side of [-1, 1]) {
       addMesh(
         head,
-        new THREE.BoxGeometry(0.18, 0.58, 0.34),
+        new THREE.CapsuleGeometry(0.115, 0.35, 6, 14),
         hairMaterial,
         [side * 0.53 * headScale[0], 0.16, -0.06],
-        [1, 1, 1],
+        [0.82, 1, 1.12],
         [0, 0, side * -4 * DEG],
       );
     }
-    addMesh(head, new THREE.BoxGeometry(0.78, 0.14, 0.15), hairHighlight, [0, 0.53, 0.49], [1, 1, 1], [0, 0, -2 * DEG]);
-  } else if (includesAny(style, ["curl", "afro", "cloud"])) {
+    addMesh(head, new THREE.SphereGeometry(0.2, 18, 10), hairHighlight, [-0.04, 0.54, 0.49], [1.85, 0.34, 0.4], [0, 0, -2 * DEG]);
+  } else if (curled) {
     cap.visible = false;
     const curls: ReadonlyArray<readonly [number, number, number, number]> = [
       [-0.46, 0.5, 0, 0.28], [-0.2, 0.68, 0, 0.29], [0.1, 0.71, -0.01, 0.3],
@@ -288,25 +369,25 @@ function addHair(
       [-0.33, 0.32, -0.35, 0.31], [0, 0.43, -0.43, 0.34], [0.34, 0.32, -0.35, 0.31],
     ];
     for (const [x, y, z, radius] of curls) {
-      addMesh(head, new THREE.DodecahedronGeometry(radius, 1), hairMaterial, [x * headScale[0], y, z], [1, 0.93, 1]);
+      addMesh(head, new THREE.SphereGeometry(radius, 16, 11), hairMaterial, [x * headScale[0], y, z], [1, 0.93, 1]);
     }
   } else if (includesAny(style, ["pony", "tail", "pigtail", "braid"])) {
     const paired = includesAny(style, ["pigtail", "twin"]);
     const sides = paired ? [-1, 1] : [1];
     for (const side of sides) {
-      addMesh(head, new THREE.CylinderGeometry(0.1, 0.17, 0.62, 9), hairMaterial, [side * (paired ? 0.56 : 0.28), 0.23, -0.48], [1, 1, 1], [0, 0, side * -13 * DEG]);
-      addMesh(head, new THREE.DodecahedronGeometry(0.17, 1), hairHighlight, [side * (paired ? 0.5 : 0.24), 0.51, -0.44]);
+      addMesh(head, new THREE.CylinderGeometry(0.1, 0.17, 0.62, 16), hairMaterial, [side * (paired ? 0.56 : 0.28), 0.23, -0.48], [1, 1, 1], [0, 0, side * -13 * DEG]);
+      addMesh(head, new THREE.SphereGeometry(0.17, 16, 10), hairHighlight, [side * (paired ? 0.5 : 0.24), 0.51, -0.44], [1, 0.9, 1]);
     }
   } else if (includesAny(style, ["bun", "topknot", "knot"])) {
-    addMesh(head, new THREE.DodecahedronGeometry(0.3, 2), hairMaterial, [0.22, 0.86, -0.12], [1, 0.9, 1]);
+    addMesh(head, new THREE.SphereGeometry(0.3, 20, 14), hairMaterial, [0.22, 0.86, -0.12], [1, 0.9, 1]);
     addMesh(head, new THREE.TorusGeometry(0.23, 0.045, 7, 16), hairHighlight, [0.22, 0.85, -0.1], [1, 1, 1], [90 * DEG, 0, 0]);
   } else if (includesAny(style, ["spike", "messy", "quiff"])) {
     const tufts: ReadonlyArray<readonly [number, number, number]> = [[-0.38, 0.72, -12], [-0.14, 0.82, -6], [0.12, 0.84, 5], [0.36, 0.73, 12]];
     for (const [x, y, angle] of tufts) {
-      addMesh(head, new THREE.ConeGeometry(0.16, 0.42, 7), hairMaterial, [x, y, 0], [1, 1, 0.9], [0, 0, angle * DEG]);
+      addMesh(head, new THREE.ConeGeometry(0.16, 0.42, 12), hairMaterial, [x, y, 0], [1, 1, 0.9], [0, 0, angle * DEG]);
     }
   } else {
-    addMesh(head, new THREE.BoxGeometry(0.68, 0.1, 0.1), hairHighlight, [-0.08, 0.59, 0.48], [1, 1, 1], [0, 0, -7 * DEG]);
+    addMesh(head, new THREE.SphereGeometry(0.2, 18, 10), hairHighlight, [-0.08, 0.59, 0.48], [1.65, 0.25, 0.32], [0, 0, -7 * DEG]);
   }
 }
 
@@ -314,8 +395,8 @@ function addTraitDetail(
   chest: THREE.Group,
   head: THREE.Group,
   trait: string,
-  shirtAccent: ToonMaterial,
-  darkMaterial: ToonMaterial,
+  shirtAccent: CharacterMaterial,
+  darkMaterial: CharacterMaterial,
 ): void {
   const value = styleName(trait);
   if (includesAny(value, ["book", "smart", "invent", "curious"])) {
@@ -335,15 +416,15 @@ function addOutfit(
   torso: THREE.Group,
   hips: THREE.Group,
   profile: CharacterProfile,
-  shirtMaterial: ToonMaterial,
-  shirtShadow: ToonMaterial,
-  shirtAccent: ToonMaterial,
-  trouserMaterial: ToonMaterial,
+  shirtMaterial: CharacterMaterial,
+  shirtShadow: CharacterMaterial,
+  shirtAccent: CharacterMaterial,
+  trouserMaterial: CharacterMaterial,
 ): void {
   const outfit = styleName(profile.outfitStyle);
-  addMesh(torso, new THREE.CylinderGeometry(0.43, 0.53, 0.82, 10), shirtMaterial, [0, 0, 0], [1, 1, 0.82]);
-  addMesh(torso, new THREE.CylinderGeometry(0.445, 0.54, 0.12, 10), shirtShadow, [0, -0.36, 0], [1, 1, 0.83]);
-  addMesh(torso, new THREE.TorusGeometry(0.17, 0.035, 7, 18), shirtAccent, [0, 0.38, 0.19], [1, 0.48, 0.9], [90 * DEG, 0, 0]);
+  addMesh(torso, new THREE.CylinderGeometry(0.43, 0.53, 0.82, 18), shirtMaterial, [0, 0, 0], [1, 1, 0.82]);
+  addMesh(torso, new THREE.CylinderGeometry(0.445, 0.54, 0.12, 18), shirtShadow, [0, -0.36, 0], [1, 1, 0.83]);
+  addMesh(torso, new THREE.TorusGeometry(0.17, 0.035, 9, 24), shirtAccent, [0, 0.38, 0.19], [1, 0.48, 0.9], [90 * DEG, 0, 0]);
 
   if (includesAny(outfit, ["overall", "dungaree"])) {
     addMesh(torso, new THREE.BoxGeometry(0.46, 0.48, 0.07), trouserMaterial, [0, -0.06, 0.405]);
@@ -356,52 +437,64 @@ function addOutfit(
       addMesh(torso, new THREE.BoxGeometry(0.38, 0.7, 0.055), shirtShadow, [side * 0.19, -0.02, 0.405], [1, 1, 1], [0, 0, side * 2 * DEG]);
     }
     addMesh(torso, new THREE.BoxGeometry(0.025, 0.62, 0.025), shirtAccent, [0, -0.03, 0.45]);
+    for (const y of [0.12, -0.08, -0.28]) {
+      addMesh(torso, new THREE.SphereGeometry(0.028, 12, 8), shirtAccent, [0.045, y, 0.46], [1, 1, 0.5]);
+    }
   } else if (includesAny(outfit, ["dress", "skirt"])) {
-    addMesh(hips, new THREE.CylinderGeometry(0.43, 0.68, 0.56, 10), shirtMaterial, [0, -0.05, 0], [1, 1, 0.86]);
-    addMesh(hips, new THREE.CylinderGeometry(0.69, 0.69, 0.07, 10), shirtAccent, [0, -0.32, 0], [1, 1, 0.86]);
+    addMesh(hips, new THREE.CylinderGeometry(0.43, 0.68, 0.56, 18), shirtMaterial, [0, -0.05, 0], [1, 1, 0.86]);
+    addMesh(hips, new THREE.CylinderGeometry(0.69, 0.69, 0.07, 18), shirtAccent, [0, -0.32, 0], [1, 1, 0.86]);
   } else if (includesAny(outfit, ["sport", "athletic", "active"])) {
     addMesh(torso, new THREE.BoxGeometry(0.08, 0.72, 0.04), shirtAccent, [0.28, -0.03, 0.42]);
     addMesh(hips, new THREE.BoxGeometry(0.77, 0.22, 0.46), trouserMaterial, [0, -0.09, 0]);
   } else {
     addMesh(torso, new THREE.BoxGeometry(0.57, 0.055, 0.055), shirtAccent, [0, 0.16, 0.42], [1, 1, 1], [0, 0, -3 * DEG]);
+    addMesh(torso, new THREE.BoxGeometry(0.2, 0.15, 0.025), shirtShadow, [0.19, -0.11, 0.445], [1, 1, 1], [0, 0, -2 * DEG]);
   }
 }
 
 function addArm(
   chest: THREE.Group,
   side: -1 | 1,
-  skinMaterial: ToonMaterial,
-  shirtMaterial: ToonMaterial,
-  shirtAccent: ToonMaterial,
+  skinMaterial: CharacterMaterial,
+  shirtMaterial: CharacterMaterial,
+  shirtAccent: CharacterMaterial,
 ): { shoulder: THREE.Group; arm: THREE.Group; forearm: THREE.Group; hand: THREE.Group } {
   const shoulder = joint(chest, side * 0.49, 0.25, 0);
   const arm = joint(shoulder, 0, 0, 0);
-  addMesh(arm, new THREE.CylinderGeometry(0.105, 0.09, 0.38, 9), shirtMaterial, [0, -0.18, 0]);
-  addMesh(arm, new THREE.CylinderGeometry(0.112, 0.112, 0.07, 9), shirtAccent, [0, -0.36, 0]);
+  addMesh(arm, new THREE.CylinderGeometry(0.105, 0.09, 0.38, 16), shirtMaterial, [0, -0.18, 0]);
+  addMesh(arm, new THREE.CylinderGeometry(0.112, 0.112, 0.07, 16), shirtAccent, [0, -0.36, 0]);
 
   const forearm = joint(arm, 0, -0.39, 0);
-  addMesh(forearm, new THREE.CylinderGeometry(0.085, 0.073, 0.38, 9), skinMaterial, [0, -0.18, 0]);
+  addMesh(forearm, new THREE.CylinderGeometry(0.085, 0.073, 0.38, 16), skinMaterial, [0, -0.18, 0]);
   const hand = joint(forearm, 0, -0.39, 0);
-  addMesh(hand, new THREE.DodecahedronGeometry(0.105, 1), skinMaterial, [0, -0.055, 0.01], [0.86, 1.08, 0.72]);
+  addMesh(hand, new THREE.SphereGeometry(0.105, 16, 11), skinMaterial, [0, -0.055, 0.01], [0.82, 1.08, 0.7]);
+  addMesh(
+    hand,
+    new THREE.SphereGeometry(0.058, 12, 8),
+    skinMaterial,
+    [-side * 0.071, -0.045, 0.045],
+    [0.72, 1, 0.72],
+    [0, 0, side * 24 * DEG],
+  );
   return { shoulder, arm, forearm, hand };
 }
 
 function addLeg(
   hips: THREE.Group,
   side: -1 | 1,
-  skinMaterial: ToonMaterial,
-  trouserMaterial: ToonMaterial,
-  shoeMaterial: ToonMaterial,
+  skinMaterial: CharacterMaterial,
+  trouserMaterial: CharacterMaterial,
+  shoeMaterial: CharacterMaterial,
   outfitStyle: string | number,
 ): { leg: THREE.Group; shin: THREE.Group; foot: THREE.Group } {
   const leg = joint(hips, side * 0.235, -0.18, 0);
   const dress = includesAny(styleName(outfitStyle), ["dress", "skirt"]);
   const upperMaterial = dress ? skinMaterial : trouserMaterial;
-  addMesh(leg, new THREE.CylinderGeometry(0.13, 0.115, 0.5, 9), upperMaterial, [0, -0.24, 0]);
+  addMesh(leg, new THREE.CylinderGeometry(0.13, 0.115, 0.5, 16), upperMaterial, [0, -0.24, 0]);
 
   const shin = joint(leg, 0, -0.5, 0);
-  addMesh(shin, new THREE.CylinderGeometry(0.11, 0.085, 0.47, 9), skinMaterial, [0, -0.22, 0]);
-  addMesh(shin, new THREE.CylinderGeometry(0.105, 0.105, 0.14, 9), shoeMaterial, [0, -0.4, 0]);
+  addMesh(shin, new THREE.CylinderGeometry(0.11, 0.085, 0.47, 16), skinMaterial, [0, -0.22, 0]);
+  addMesh(shin, new THREE.CylinderGeometry(0.105, 0.105, 0.14, 16), shoeMaterial, [0, -0.4, 0]);
 
   const foot = joint(shin, 0, -0.47, 0.08);
   addMesh(foot, new THREE.BoxGeometry(0.25, 0.15, 0.4), shoeMaterial, [0, -0.015, 0.1], [1, 1, 1]);
@@ -430,18 +523,18 @@ export function createCharacter(profile: CharacterProfile): Character {
   const head = joint(neck, 0, 0.34, 0);
   head.name = "head";
 
-  const skinMaterial = material(profile.skin || "#d99a73");
-  const skinShadow = material(shiftedColor(profile.skin, -0.1, "#b9795d"));
-  const hairMaterial = material(profile.hair || "#4a3028");
-  const hairHighlight = material(shiftedColor(profile.hair, 0.08, "#67453a"));
-  const shirtMaterial = material(profile.shirt || "#5ba8a0");
-  const shirtShadow = material(shiftedColor(profile.shirt, -0.12, "#3d7e79"));
-  const shirtAccent = material(shiftedColor(profile.shirt, 0.16, "#8dd0c8"));
-  const trouserMaterial = material("#405b72");
-  const shoeMaterial = material("#303946");
+  const skinMaterial = material(profile.skin || "#d99a73", { surface: "skin" });
+  const skinShadow = material(shiftedColor(profile.skin, -0.1, "#b9795d"), { surface: "skin" });
+  const hairMaterial = material(profile.hair || "#4a3028", { surface: "hair" });
+  const hairHighlight = material(shiftedColor(profile.hair, 0.08, "#67453a"), { surface: "hair" });
+  const shirtMaterial = material(profile.shirt || "#5ba8a0", { surface: "fabric" });
+  const shirtShadow = material(shiftedColor(profile.shirt, -0.12, "#3d7e79"), { surface: "fabric" });
+  const shirtAccent = material(shiftedColor(profile.shirt, 0.16, "#8dd0c8"), { surface: "fabric" });
+  const trouserMaterial = material("#405b72", { surface: "fabric" });
+  const shoeMaterial = material("#303946", { surface: "leather" });
 
   addOutfit(torso, hips, profile, shirtMaterial, shirtShadow, shirtAccent, trouserMaterial);
-  addMesh(neck, new THREE.CylinderGeometry(0.16, 0.18, 0.25, 10), skinMaterial, [0, -0.08, 0]);
+  addMesh(neck, new THREE.CylinderGeometry(0.16, 0.18, 0.25, 16), skinMaterial, [0, -0.08, 0]);
 
   const face = styleName(profile.faceShape);
   const headScale: readonly [number, number, number] = includesAny(face, ["round", "wide", "soft"])
@@ -477,10 +570,10 @@ export function createCharacter(profile: CharacterProfile): Character {
   // Ears and subtle cheeks break up the face silhouette without noisy outlines.
   for (const side of [-1, 1]) {
     addMesh(head, new THREE.SphereGeometry(0.105, 12, 8), skinMaterial, [side * 0.59 * headScale[0], 0.24, -0.01], [0.62, 1, 0.52]);
-    addMesh(head, new THREE.CircleGeometry(0.075, 16), material("#e88486", { transparent: true, opacity: 0.32 }), [side * 0.34, 0.11, 0.545], [1.25, 0.58, 1]);
+    addMesh(head, new THREE.CircleGeometry(0.075, 16), material("#e88486", { transparent: true, opacity: 0.28, surface: "skin" }), [side * 0.34, 0.11, 0.545], [1.25, 0.58, 1]);
   }
 
-  addTraitDetail(chest, head, profile.trait, shirtAccent, material("#293547"));
+  addTraitDetail(chest, head, profile.trait, shirtAccent, material("#293547", { surface: "leather" }));
   const left = addArm(chest, -1, skinMaterial, shirtMaterial, shirtAccent);
   const right = addArm(chest, 1, skinMaterial, shirtMaterial, shirtAccent);
   const leftLeg = addLeg(hips, -1, skinMaterial, trouserMaterial, shoeMaterial, profile.outfitStyle);

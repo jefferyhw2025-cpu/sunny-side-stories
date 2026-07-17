@@ -1,10 +1,12 @@
 .world3d canvas {
   image-rendering: auto;
-  filter: saturate(1.04) contrast(1.06);
+  filter: none;
 }
 
 .world::after {
-  background: linear-gradient(0deg, rgba(41, 66, 78, 0.08), transparent 22%);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 32%),
+    radial-gradient(circle at 50% 44%, transparent 62%, rgba(44, 67, 73, 0.035) 100%);
 }
 
 .face {
