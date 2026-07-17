@@ -92,8 +92,80 @@ interface CharacterMaterialOptions {
 const FRONT = 0.01;
 const DEG = Math.PI / 180;
 
+const HAIR_STYLES = [
+  "crop",
+  "bob",
+  "pixie",
+  "curly",
+  "ponytail",
+  "pigtails",
+  "bun",
+  "braid",
+  "quiff",
+  "undercut",
+  "long",
+  "afro",
+] as const;
+const FACE_STYLES = ["round", "oval", "soft-square", "heart", "slim", "broad"] as const;
+const EYE_STYLES = [
+  "classic",
+  "round",
+  "sparkle",
+  "almond",
+  "happy",
+  "sleepy",
+  "dot",
+  "kind",
+  "cat",
+  "downturned",
+  "focused",
+  "lashes",
+] as const;
+const BROW_STYLES = ["soft", "straight", "arch", "bold", "curious", "gentle", "determined", "short"] as const;
+const NOSE_STYLES = ["button", "tiny", "round", "soft-triangle", "short-line", "long", "upturned", "broad", "freckle", "pointed"] as const;
+const MOUTH_STYLES = ["smile", "grin", "small", "open", "cat", "pout", "toothy", "neutral", "laugh", "dimple"] as const;
+const OUTFIT_STYLES = ["tee", "overalls", "jacket", "dress", "sport", "sweater", "sailor", "hoodie"] as const;
+
+const materialCache = new Map<string, CharacterMaterial>();
+const geometryCache = new Map<string, THREE.BufferGeometry>();
+
+function cachedGeometry<T extends THREE.BufferGeometry>(key: string, create: () => T): T {
+  const cached = geometryCache.get(key);
+  if (cached) return cached as T;
+  const result = create();
+  result.userData.sharedCharacterAsset = true;
+  geometryCache.set(key, result);
+  return result;
+}
+
 function styleName(value: string | number): string {
   return String(value).trim().toLowerCase().replace(/[\s_]+/g, "-");
+}
+
+function resolveStyle<T extends readonly string[]>(
+  value: string | number,
+  styles: T,
+  fallback: T[number],
+): string {
+  const requested = styleName(value);
+  if (/^-?\d+$/.test(requested)) {
+    const index = Number.parseInt(requested, 10);
+    if (index >= 0 && index < styles.length) return styles[index];
+    return fallback;
+  }
+  return requested || fallback;
+}
+
+function resolveFaceStyle(value: string | number): string {
+  const requested = resolveStyle(value, FACE_STYLES, "round");
+  if ((FACE_STYLES as readonly string[]).includes(requested)) return requested;
+  if (includesAny(requested, ["round", "wide", "soft", "baby"])) return "round";
+  if (includesAny(requested, ["long", "oval"])) return "oval";
+  if (includesAny(requested, ["square", "angular", "strong"])) return "soft-square";
+  if (includesAny(requested, ["heart", "pointed-chin"])) return "heart";
+  if (includesAny(requested, ["slim", "narrow", "thin"])) return "slim";
+  if (includesAny(requested, ["broad", "full"])) return "broad";
+  return "round";
 }
 
 function includesAny(value: string, candidates: readonly string[]): boolean {
@@ -116,54 +188,76 @@ function material(
   color: THREE.ColorRepresentation,
   options: CharacterMaterialOptions = {},
 ): CharacterMaterial {
+  const resolvedColor = new THREE.Color(color);
+  const surface = options.surface ?? "detail";
+  const key = [
+    resolvedColor.getHexString(),
+    surface,
+    options.side ?? THREE.FrontSide,
+    options.transparent ? 1 : 0,
+    options.opacity ?? 1,
+  ].join(":");
+  const cached = materialCache.get(key);
+  if (cached) return cached;
+
   const base = {
-    color,
+    color: resolvedColor,
     side: options.side ?? THREE.FrontSide,
     transparent: options.transparent ?? false,
     opacity: options.opacity ?? 1,
     metalness: 0,
   };
 
-  switch (options.surface ?? "detail") {
+  let result: CharacterMaterial;
+  switch (surface) {
     case "skin":
-      return new THREE.MeshPhysicalMaterial({
+      result = new THREE.MeshPhysicalMaterial({
         ...base,
-        roughness: 0.66,
-        clearcoat: 0.025,
+        roughness: 0.71,
+        clearcoat: 0.018,
         clearcoatRoughness: 0.9,
-        sheen: 0.06,
-        sheenColor: color,
+        sheen: 0.045,
+        sheenColor: resolvedColor,
         sheenRoughness: 0.94,
       });
+      break;
     case "fabric":
-      return new THREE.MeshPhysicalMaterial({
+      result = new THREE.MeshPhysicalMaterial({
         ...base,
-        roughness: 0.9,
+        roughness: 0.94,
         clearcoat: 0,
-        sheen: 0.14,
-        sheenColor: new THREE.Color(color).offsetHSL(0, 0, 0.08),
+        sheen: 0.2,
+        sheenColor: resolvedColor.clone().offsetHSL(0, 0, 0.08),
         sheenRoughness: 0.86,
       });
+      break;
     case "leather":
-      return new THREE.MeshPhysicalMaterial({
+      result = new THREE.MeshPhysicalMaterial({
         ...base,
-        roughness: 0.42,
-        clearcoat: 0.18,
+        roughness: 0.48,
+        clearcoat: 0.16,
         clearcoatRoughness: 0.58,
       });
+      break;
     case "eye":
-      return new THREE.MeshPhysicalMaterial({
+      result = new THREE.MeshPhysicalMaterial({
         ...base,
-        roughness: 0.16,
-        clearcoat: 0.72,
+        roughness: 0.12,
+        clearcoat: 0.82,
         clearcoatRoughness: 0.2,
       });
+      break;
     case "hair":
-      return new THREE.MeshStandardMaterial({ ...base, roughness: 0.4 });
+      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.46 });
+      break;
     case "detail":
     default:
-      return new THREE.MeshStandardMaterial({ ...base, roughness: 0.74 });
+      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.76 });
+      break;
   }
+  result.userData.sharedCharacterAsset = true;
+  materialCache.set(key, result);
+  return result;
 }
 
 function addMesh(
@@ -197,38 +291,72 @@ function createEye(
   style: string,
   skinMaterial: CharacterMaterial,
 ): THREE.Group {
-  const eye = joint(parent, x, 0.29, 0.535 + FRONT);
+  const resolved = resolveStyle(style, EYE_STYLES, "classic");
+  const eye = joint(parent, x, 0.285, 0.535 + FRONT);
   const dark = material("#243044", { surface: "eye" });
   const white = material("#fffdf7", { surface: "eye" });
-  const iris = material("#4a6f82", { surface: "eye" });
+  const iris = material("#527d8e", { surface: "eye" });
+  const highlight = material("#ffffff", { surface: "eye" });
 
-  if (includesAny(style, ["sleep", "closed", "calm"])) {
-    addMesh(eye, new THREE.BoxGeometry(0.16, 0.025, 0.018), dark, [0, 0, 0]);
-    addMesh(
+  const circle = (radius: number, segments = 24) => cachedGeometry(
+    `circle:${radius}:${segments}`,
+    () => new THREE.CircleGeometry(radius, segments),
+  );
+  const addLashes = (outerSide: number, count = 2): void => {
+    for (let index = 0; index < count; index += 1) {
+      addMesh(
+        eye,
+        cachedGeometry("eye-lash", () => new THREE.BoxGeometry(0.055, 0.012, 0.014)),
+        dark,
+        [outerSide * (0.085 + index * 0.018), 0.06 - index * 0.018, 0.025],
+        [1, 1, 1],
+        [0, 0, outerSide * (28 + index * 12) * DEG],
+      );
+    }
+  };
+
+  if (includesAny(resolved, ["sleep", "closed", "calm", "happy"])) {
+    const arc = addMesh(
       eye,
-      new THREE.CircleGeometry(0.045, 16, 0, Math.PI),
-      skinMaterial,
-      [0, -0.012, 0.011],
-      [1.35, 0.55, 1],
-      [0, 0, Math.PI],
+      cachedGeometry("eye-closed-arc", () => new THREE.TorusGeometry(0.085, 0.014, 7, 24, Math.PI)),
+      dark,
+      [0, resolved === "happy" ? -0.005 : 0.018, 0],
+      [1.08, resolved === "happy" ? 0.72 : 0.42, 1],
+      [0, 0, resolved === "happy" ? 0 : Math.PI],
     );
-  } else if (includesAny(style, ["dot", "tiny", "button"])) {
-    addMesh(eye, new THREE.CircleGeometry(0.064, 18), dark, [0, 0, 0], [0.82, 1.12, 1]);
-    addMesh(eye, new THREE.CircleGeometry(0.015, 12), white, [-0.017, 0.021, 0.012]);
+    arc.name = "eye-line";
+    if (resolved === "happy") addLashes(x < 0 ? -1 : 1, 1);
+    addMesh(eye, circle(0.04, 18), skinMaterial, [0, -0.035, -0.005], [1.6, 0.45, 1]);
+  } else if (includesAny(resolved, ["dot", "tiny", "button"])) {
+    addMesh(eye, circle(0.062, 22), dark, [0, 0, 0], [0.8, 1.12, 1]);
+    addMesh(eye, circle(0.014, 14), highlight, [-0.017, 0.021, 0.012]);
   } else {
-    const wide = includesAny(style, ["wide", "round", "sparkle"]);
+    const wide = includesAny(resolved, ["wide", "round", "sparkle", "kind", "lashes"]);
+    const almond = includesAny(resolved, ["almond", "cat", "focused", "downturned"]);
+    const eyeScaleX = almond ? 1.22 : wide ? 0.98 : 0.88;
+    const eyeScaleY = almond ? 0.68 : wide ? 1.08 : 0.92;
     addMesh(
       eye,
-      new THREE.CircleGeometry(wide ? 0.112 : 0.096, 20),
+      circle(wide ? 0.11 : 0.1),
       white,
       [0, 0, 0],
-      [wide ? 0.92 : 0.82, wide ? 1.05 : 0.92, 1],
+      [eyeScaleX, eyeScaleY, 1],
+      [0, 0, resolved === "downturned" ? (x < 0 ? -7 : 7) * DEG : resolved === "cat" ? (x < 0 ? 6 : -6) * DEG : 0],
     );
-    addMesh(eye, new THREE.CircleGeometry(wide ? 0.064 : 0.056, 18), iris, [0, -0.004, 0.012]);
-    addMesh(eye, new THREE.CircleGeometry(0.029, 16), dark, [0, -0.006, 0.023]);
-    addMesh(eye, new THREE.CircleGeometry(0.012, 12), white, [-0.015, 0.018, 0.034]);
+    const irisRadius = wide ? 0.066 : 0.058;
+    addMesh(eye, circle(irisRadius, 22), iris, [0, resolved === "kind" ? -0.012 : -0.004, 0.012]);
+    addMesh(eye, circle(0.031, 20), dark, [0, -0.006, 0.023]);
+    addMesh(eye, circle(resolved === "sparkle" ? 0.016 : 0.012, 14), highlight, [-0.016, 0.02, 0.034]);
+    if (resolved === "sparkle") {
+      addMesh(eye, circle(0.007, 10), highlight, [0.02, -0.02, 0.035]);
+    }
+    if (includesAny(resolved, ["lashes", "cat"])) addLashes(x < 0 ? -1 : 1, resolved === "lashes" ? 3 : 2);
+    if (resolved === "focused") {
+      addMesh(eye, cachedGeometry("focused-lid", () => new THREE.BoxGeometry(0.19, 0.018, 0.018)), dark, [0, 0.07, 0.025], [1, 1, 1], [0, 0, x < 0 ? -7 * DEG : 7 * DEG]);
+    }
   }
 
+  eye.userData.baseY = eye.position.y;
   return eye;
 }
 
@@ -238,63 +366,107 @@ function createBrow(
   style: string,
   hairMaterial: CharacterMaterial,
 ): THREE.Group {
+  const resolved = resolveStyle(style, BROW_STYLES, "soft");
   const brow = joint(parent, x, 0.46, 0.552 + FRONT);
-  const bold = includesAny(style, ["bold", "thick", "strong"]);
-  const arch = includesAny(style, ["arch", "curious", "raised"]);
-  const soft = includesAny(style, ["soft", "round"]);
+  const bold = includesAny(resolved, ["bold", "thick", "strong", "determined"]);
+  const arch = includesAny(resolved, ["arch", "curious", "raised", "gentle"]);
+  const soft = includesAny(resolved, ["soft", "round", "gentle"]);
+  const short = resolved === "short";
   const browMesh = addMesh(
     brow,
-    soft ? new THREE.TorusGeometry(0.095, bold ? 0.024 : 0.017, 6, 16, Math.PI) : new THREE.BoxGeometry(0.18, bold ? 0.045 : 0.027, 0.025),
+    soft
+      ? cachedGeometry(`brow-arc:${bold ? "bold" : "fine"}`, () => new THREE.TorusGeometry(0.095, bold ? 0.023 : 0.016, 7, 20, Math.PI))
+      : cachedGeometry(`brow-bar:${bold ? "bold" : "fine"}`, () => new THREE.CapsuleGeometry(bold ? 0.023 : 0.014, bold ? 0.135 : 0.145, 4, 12)),
     hairMaterial,
     [0, 0, 0],
-    [1, arch ? 1.3 : 1, 1],
+    [short ? 0.7 : 1, arch ? 1.25 : 1, 1],
+    soft ? [0, 0, 0] : [0, 0, 90 * DEG],
   );
-  browMesh.rotation.z = (x < 0 ? 1 : -1) * (arch ? 9 * DEG : 3 * DEG);
+  const baseTilt = resolved === "determined" ? -10 : resolved === "curious" ? 12 : arch ? 7 : 2;
+  browMesh.rotation.z += (x < 0 ? 1 : -1) * baseTilt * DEG;
+  brow.userData.baseY = brow.position.y;
   return brow;
 }
 
 function createNose(parent: THREE.Object3D, style: string, skinShadow: CharacterMaterial): void {
-  if (includesAny(style, ["point", "sharp", "long"])) {
+  const resolved = resolveStyle(style, NOSE_STYLES, "button");
+  if (includesAny(resolved, ["point", "sharp", "long"])) {
     addMesh(
       parent,
-      new THREE.ConeGeometry(0.055, 0.16, 8),
+      cachedGeometry(`nose-cone:${resolved}`, () => new THREE.ConeGeometry(resolved === "long" ? 0.046 : 0.058, resolved === "long" ? 0.18 : 0.135, 12)),
       skinShadow,
-      [0, 0.2, 0.585],
+      [0, 0.195, 0.584],
       [1, 1, 1],
       [90 * DEG, 0, 0],
     );
-  } else if (includesAny(style, ["line", "small", "subtle"])) {
-    addMesh(parent, new THREE.BoxGeometry(0.035, 0.105, 0.025), skinShadow, [0, 0.2, 0.577], [1, 1, 1], [0, 0, -5 * DEG]);
+  } else if (includesAny(resolved, ["line", "small", "subtle", "tiny"])) {
+    const nose = addMesh(parent, cachedGeometry("nose-line", () => new THREE.CapsuleGeometry(0.015, 0.07, 4, 10)), skinShadow, [0, 0.2, 0.577], [1, resolved === "tiny" ? 0.65 : 1, 0.7]);
+    nose.rotation.z = -5 * DEG;
+  } else if (resolved === "soft-triangle" || resolved === "upturned") {
+    addMesh(parent, cachedGeometry("nose-soft-triangle", () => new THREE.ConeGeometry(0.055, 0.07, 3)), skinShadow, [0, resolved === "upturned" ? 0.22 : 0.19, 0.582], [1, 1, 0.5], [90 * DEG, 0, resolved === "upturned" ? Math.PI : 0]);
   } else {
-    addMesh(parent, new THREE.SphereGeometry(0.062, 14, 10), skinShadow, [0, 0.19, 0.578], [0.86, 0.72, 0.72]);
+    const broad = resolved === "broad";
+    addMesh(parent, cachedGeometry("nose-button", () => new THREE.SphereGeometry(0.062, 18, 12)), skinShadow, [0, 0.19, 0.578], [broad ? 1.22 : 0.86, broad ? 0.62 : 0.72, 0.72]);
+  }
+  if (resolved === "freckle") {
+    const freckle = material("#9b654e", { surface: "detail" });
+    for (const [x, y] of [[-0.09, 0.17], [-0.055, 0.15], [0.055, 0.155], [0.095, 0.18]] as const) {
+      addMesh(parent, cachedGeometry("freckle-dot", () => new THREE.CircleGeometry(0.012, 10)), freckle, [x, y, 0.591], [1, 0.75, 1]);
+    }
   }
 }
 
 function createMouth(parent: THREE.Object3D, style: string): THREE.Group {
+  const resolved = resolveStyle(style, MOUTH_STYLES, "smile");
   const mouth = joint(parent, 0, 0.04, 0.574 + FRONT);
   const lip = material("#9e4051", { surface: "detail" });
   const inside = material("#5a2734", { surface: "detail" });
   const teeth = material("#fff9ed", { surface: "eye" });
+  const tongue = material("#db7180", { surface: "skin" });
+  const rest = new THREE.Group();
+  rest.name = "mouth-rest";
+  mouth.add(rest);
+  const open = new THREE.Group();
+  open.name = "mouth-open-expression";
+  mouth.add(open);
 
-  if (includesAny(style, ["grin", "big", "toothy"])) {
-    addMesh(mouth, new THREE.CircleGeometry(0.12, 20), inside, [0, 0, 0], [1.35, 0.58, 1]);
-    addMesh(mouth, new THREE.BoxGeometry(0.2, 0.045, 0.012), teeth, [0, 0.018, 0.012]);
-  } else if (includesAny(style, ["small", "quiet", "neutral"])) {
-    addMesh(mouth, new THREE.BoxGeometry(0.13, 0.027, 0.018), lip);
+  if (includesAny(resolved, ["small", "quiet", "neutral"])) {
+    addMesh(rest, cachedGeometry("mouth-line", () => new THREE.CapsuleGeometry(0.012, 0.1, 4, 12)), lip, [0, 0, 0], [resolved === "small" ? 0.72 : 1, 1, 1], [0, 0, 90 * DEG]);
+  } else if (resolved === "cat") {
+    for (const side of [-1, 1]) {
+      addMesh(rest, cachedGeometry("mouth-cat-half", () => new THREE.TorusGeometry(0.057, 0.014, 7, 18, Math.PI)), lip, [side * 0.05, 0.02, 0], [1, 0.62, 1], [0, 0, side < 0 ? Math.PI : 0]);
+    }
+  } else if (resolved === "pout") {
+    addMesh(rest, cachedGeometry("mouth-pout", () => new THREE.TorusGeometry(0.085, 0.016, 7, 20, Math.PI)), lip, [0, -0.01, 0], [1.12, 0.65, 1]);
   } else {
     const smile = addMesh(
-      mouth,
-      new THREE.TorusGeometry(0.105, 0.018, 7, 20, Math.PI),
+      rest,
+      cachedGeometry("mouth-smile", () => new THREE.TorusGeometry(0.105, 0.017, 7, 22, Math.PI)),
       lip,
       [0, 0.035, 0],
-      [1.15, 0.8, 1],
+      [resolved === "dimple" ? 0.94 : 1.15, 0.8, 1],
       [0, 0, Math.PI],
     );
     smile.name = "smile";
+    if (resolved === "dimple") {
+      for (const side of [-1, 1]) addMesh(rest, cachedGeometry("dimple-dot", () => new THREE.CircleGeometry(0.014, 10)), lip, [side * 0.13, 0.017, 0]);
+    }
   }
 
-  const openMouth = addMesh(mouth, new THREE.CircleGeometry(0.09, 18), inside, [0, -0.018, -0.004], [1, 0.08, 1]);
+  const openMouth = addMesh(open, cachedGeometry("mouth-open", () => new THREE.CircleGeometry(0.105, 24)), inside, [0, -0.008, 0], [resolved === "laugh" ? 1.4 : 1.15, 0.78, 1]);
   openMouth.name = "open-mouth";
+  addMesh(open, cachedGeometry("mouth-tongue", () => new THREE.CircleGeometry(0.061, 18, 0, Math.PI)), tongue, [0, -0.043, 0.014], [1.15, 0.58, 1], [0, 0, Math.PI]);
+  if (includesAny(resolved, ["grin", "big", "toothy", "laugh"])) {
+    addMesh(open, cachedGeometry("mouth-teeth", () => new THREE.BoxGeometry(0.19, 0.042, 0.012)), teeth, [0, 0.034, 0.016]);
+  }
+  const baseOpen = includesAny(resolved, ["grin", "big", "open", "toothy", "laugh"]);
+  rest.visible = !baseOpen;
+  open.visible = baseOpen;
+  open.scale.y = baseOpen ? 0.7 : 0.08;
+  mouth.userData.rest = rest;
+  mouth.userData.open = open;
+  mouth.userData.baseOpen = baseOpen;
+  mouth.userData.style = resolved;
   return mouth;
 }
 
@@ -305,89 +477,113 @@ function addHair(
   hairMaterial: CharacterMaterial,
   hairHighlight: CharacterMaterial,
 ): void {
-  const requested = styleName(profile.hairStyle);
-  const numericStyles: Record<string, string> = { "0": "crop", "1": "spikes", "2": "pigtails", "3": "bun" };
-  const style = numericStyles[requested] ?? requested;
-
+  const style = resolveStyle(profile.hairStyle, HAIR_STYLES, "crop");
+  const capGeometry = cachedGeometry("hair-cap", () => new THREE.SphereGeometry(0.625, 30, 18, 0, Math.PI * 2, 0, Math.PI * 0.61));
+  const lockGeometry = cachedGeometry("hair-lock", () => new THREE.SphereGeometry(0.18, 20, 14));
+  const curlGeometry = cachedGeometry("hair-curl", () => new THREE.SphereGeometry(0.22, 18, 14));
+  const sideGeometry = cachedGeometry("hair-side-lock", () => new THREE.CapsuleGeometry(0.105, 0.34, 7, 16));
   const cap = addMesh(
     head,
-    new THREE.SphereGeometry(0.625, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.6),
+    capGeometry,
     hairMaterial,
-    [0, 0.35, -0.01],
-    [headScale[0] * 1.035, headScale[1] * 1.02, headScale[2] * 1.035],
+    [0, 0.35, -0.012],
+    [headScale[0] * 1.04, headScale[1] * 1.025, headScale[2] * 1.045],
   );
   cap.name = "hair-cap";
 
-  const curled = includesAny(style, ["curl", "afro", "cloud"]);
-  if (!curled) {
-    // Separate locks give the hair a readable cut and part instead of one helmet-like cap.
-    const fringe: ReadonlyArray<readonly [number, number, number, number]> = [
-      [-0.36, 0.54, -8, 1.02],
-      [-0.14, 0.59, -3, 1.14],
-      [0.12, 0.58, 4, 1.1],
-      [0.35, 0.53, 9, 0.98],
-    ];
-    for (const [x, y, angle, width] of fringe) {
-      addMesh(
-        head,
-        new THREE.SphereGeometry(0.18, 18, 12),
-        x === -0.14 || x === 0.35 ? hairHighlight : hairMaterial,
-        [x * headScale[0], y, 0.505 * headScale[2]],
-        [width, 0.54, 0.38],
-        [0, 0, angle * DEG],
-      );
-    }
-    for (const side of [-1, 1]) {
-      addMesh(
-        head,
-        new THREE.SphereGeometry(0.155, 16, 10),
-        hairMaterial,
-        [side * 0.55 * headScale[0], 0.25, 0.31],
-        [0.5, 1.22, 0.52],
-        [0, 0, side * -7 * DEG],
-      );
-    }
-  }
+  const addLock = (
+    x: number,
+    y: number,
+    z: number,
+    sx: number,
+    sy: number,
+    sz: number,
+    angle = 0,
+    accent = false,
+  ): void => {
+    addMesh(head, lockGeometry, accent ? hairHighlight : hairMaterial, [x * headScale[0], y, z * headScale[2]], [sx, sy, sz], [0, 0, angle * DEG]);
+  };
 
-  if (includesAny(style, ["bob", "page", "straight"])) {
+  const addPartedFringe = (sweep = 0, short = false): void => {
+    const fringe: ReadonlyArray<readonly [number, number, number, number, boolean]> = [
+      [-0.35, 0.53, -10 + sweep, short ? 0.72 : 0.94, false],
+      [-0.13, 0.59, -3 + sweep, short ? 0.82 : 1.1, true],
+      [0.11, 0.58, 5 + sweep, short ? 0.76 : 1.05, false],
+      [0.34, 0.52, 11 + sweep, short ? 0.68 : 0.9, true],
+    ];
+    for (const [x, y, angle, width, accent] of fringe) addLock(x, y, 0.505, width, short ? 0.42 : 0.55, 0.34, angle, accent);
+  };
+
+  const addSideburns = (length = 1): void => {
     for (const side of [-1, 1]) {
-      addMesh(
-        head,
-        new THREE.CapsuleGeometry(0.115, 0.35, 6, 14),
-        hairMaterial,
-        [side * 0.53 * headScale[0], 0.16, -0.06],
-        [0.82, 1, 1.12],
-        [0, 0, side * -4 * DEG],
-      );
+      addMesh(head, sideGeometry, hairMaterial, [side * 0.55 * headScale[0], 0.25 - (length - 1) * 0.08, 0.2], [0.5, length, 0.58], [0, 0, side * -6 * DEG]);
     }
-    addMesh(head, new THREE.SphereGeometry(0.2, 18, 10), hairHighlight, [-0.04, 0.54, 0.49], [1.85, 0.34, 0.4], [0, 0, -2 * DEG]);
+  };
+
+  const curled = includesAny(style, ["curl", "afro", "cloud"]);
+  if (!curled) addPartedFringe(includesAny(style, ["pixie", "undercut"]) ? 8 : 0, includesAny(style, ["crop", "pixie", "undercut"]));
+
+  if (includesAny(style, ["bob", "page"])) {
+    addSideburns(1.28);
+    for (const side of [-1, 1]) {
+      addMesh(head, sideGeometry, hairMaterial, [side * 0.51 * headScale[0], 0.06, -0.08], [1.02, 1.28, 1.28], [0, 0, side * -4 * DEG]);
+      addLock(side * 0.44, 0.02, 0.29, 0.72, 1.18, 0.48, side * 7, side > 0);
+    }
+  } else if (includesAny(style, ["pixie"])) {
+    addSideburns(0.7);
+    const tufts: ReadonlyArray<readonly [number, number, number]> = [[-0.42, 0.69, -28], [-0.17, 0.76, -13], [0.11, 0.76, 7], [0.39, 0.68, 25]];
+    for (const [x, y, angle] of tufts) addMesh(head, cachedGeometry("hair-tuft-small", () => new THREE.ConeGeometry(0.11, 0.3, 14)), hairMaterial, [x, y, -0.02], [1, 1, 0.85], [0, 0, angle * DEG]);
   } else if (curled) {
     cap.visible = false;
-    const curls: ReadonlyArray<readonly [number, number, number, number]> = [
-      [-0.46, 0.5, 0, 0.28], [-0.2, 0.68, 0, 0.29], [0.1, 0.71, -0.01, 0.3],
-      [0.4, 0.56, -0.01, 0.28], [-0.51, 0.25, -0.03, 0.27], [0.5, 0.25, -0.04, 0.27],
-      [-0.33, 0.32, -0.35, 0.31], [0, 0.43, -0.43, 0.34], [0.34, 0.32, -0.35, 0.31],
-    ];
-    for (const [x, y, z, radius] of curls) {
-      addMesh(head, new THREE.SphereGeometry(radius, 16, 11), hairMaterial, [x * headScale[0], y, z], [1, 0.93, 1]);
+    const afro = includesAny(style, ["afro", "cloud"]);
+    const curls: ReadonlyArray<readonly [number, number, number, number]> = afro
+      ? [[-0.55, 0.52, 0, 1.25], [-0.3, 0.77, 0, 1.36], [0.02, 0.84, -0.02, 1.42], [0.35, 0.74, -0.02, 1.34], [0.57, 0.48, 0, 1.22], [-0.61, 0.22, -0.08, 1.2], [0.61, 0.2, -0.08, 1.2], [-0.42, 0.34, -0.42, 1.35], [-0.12, 0.49, -0.5, 1.43], [0.22, 0.47, -0.49, 1.4], [0.47, 0.31, -0.4, 1.31]]
+      : [[-0.48, 0.53, 0, 1], [-0.22, 0.7, 0, 1.08], [0.08, 0.73, -0.01, 1.12], [0.39, 0.57, -0.01, 1.04], [-0.52, 0.27, -0.04, 0.98], [0.51, 0.26, -0.04, 1], [-0.34, 0.34, -0.37, 1.12], [-0.02, 0.44, -0.45, 1.2], [0.33, 0.33, -0.37, 1.12]];
+    for (let index = 0; index < curls.length; index += 1) {
+      const [x, y, z, scale] = curls[index];
+      addMesh(head, curlGeometry, index % 4 === 1 ? hairHighlight : hairMaterial, [x * headScale[0], y, z], [scale, scale * 0.92, scale]);
     }
-  } else if (includesAny(style, ["pony", "tail", "pigtail", "braid"])) {
-    const paired = includesAny(style, ["pigtail", "twin"]);
-    const sides = paired ? [-1, 1] : [1];
-    for (const side of sides) {
-      addMesh(head, new THREE.CylinderGeometry(0.1, 0.17, 0.62, 16), hairMaterial, [side * (paired ? 0.56 : 0.28), 0.23, -0.48], [1, 1, 1], [0, 0, side * -13 * DEG]);
-      addMesh(head, new THREE.SphereGeometry(0.17, 16, 10), hairHighlight, [side * (paired ? 0.5 : 0.24), 0.51, -0.44], [1, 0.9, 1]);
+  } else if (includesAny(style, ["pigtail", "twin"])) {
+    addSideburns(0.92);
+    for (const side of [-1, 1]) {
+      addMesh(head, cachedGeometry("hair-tail", () => new THREE.CapsuleGeometry(0.13, 0.42, 7, 16)), hairMaterial, [side * 0.66, 0.22, -0.18], [1.12, 1, 1.08], [0, 0, side * -18 * DEG]);
+      addMesh(head, cachedGeometry("hair-tie", () => new THREE.TorusGeometry(0.12, 0.032, 8, 20)), hairHighlight, [side * 0.57, 0.49, -0.14], [1, 1, 1], [90 * DEG, 0, 0]);
     }
+  } else if (includesAny(style, ["pony", "tail"])) {
+    addSideburns(0.9);
+    addMesh(head, cachedGeometry("hair-ponytail", () => new THREE.CapsuleGeometry(0.16, 0.58, 8, 18)), hairMaterial, [0.16, 0.17, -0.55], [1.15, 1, 1.08], [16 * DEG, 0, -12 * DEG]);
+    addMesh(head, cachedGeometry("hair-tie", () => new THREE.TorusGeometry(0.12, 0.032, 8, 20)), hairHighlight, [0.12, 0.55, -0.45], [1, 1, 1], [90 * DEG, 0, 0]);
+  } else if (includesAny(style, ["braid"])) {
+    addSideburns(1.02);
+    for (let index = 0; index < 5; index += 1) {
+      addMesh(head, cachedGeometry("hair-braid-segment", () => new THREE.SphereGeometry(0.14, 16, 12)), index % 2 ? hairHighlight : hairMaterial, [0.28 + Math.sin(index * 1.7) * 0.035, 0.38 - index * 0.19, -0.48], [1, 1.18, 0.9], [0, 0, (index % 2 ? -8 : 8) * DEG]);
+    }
+    addMesh(head, cachedGeometry("hair-braid-tie", () => new THREE.TorusGeometry(0.085, 0.024, 7, 18)), hairHighlight, [0.28, -0.42, -0.47], [1, 1, 1], [90 * DEG, 0, 0]);
   } else if (includesAny(style, ["bun", "topknot", "knot"])) {
-    addMesh(head, new THREE.SphereGeometry(0.3, 20, 14), hairMaterial, [0.22, 0.86, -0.12], [1, 0.9, 1]);
-    addMesh(head, new THREE.TorusGeometry(0.23, 0.045, 7, 16), hairHighlight, [0.22, 0.85, -0.1], [1, 1, 1], [90 * DEG, 0, 0]);
-  } else if (includesAny(style, ["spike", "messy", "quiff"])) {
-    const tufts: ReadonlyArray<readonly [number, number, number]> = [[-0.38, 0.72, -12], [-0.14, 0.82, -6], [0.12, 0.84, 5], [0.36, 0.73, 12]];
-    for (const [x, y, angle] of tufts) {
-      addMesh(head, new THREE.ConeGeometry(0.16, 0.42, 12), hairMaterial, [x, y, 0], [1, 1, 0.9], [0, 0, angle * DEG]);
+    addSideburns(0.82);
+    addMesh(head, cachedGeometry("hair-bun", () => new THREE.SphereGeometry(0.29, 24, 18)), hairMaterial, [0.2, 0.86, -0.11], [1, 0.9, 1]);
+    addMesh(head, cachedGeometry("hair-bun-ring", () => new THREE.TorusGeometry(0.225, 0.042, 9, 24)), hairHighlight, [0.2, 0.85, -0.09], [1, 1, 1], [90 * DEG, 0, 0]);
+  } else if (includesAny(style, ["quiff", "spike", "messy"])) {
+    addSideburns(0.72);
+    const tufts: ReadonlyArray<readonly [number, number, number, number]> = [[-0.38, 0.7, -20, 0.33], [-0.14, 0.82, -9, 0.42], [0.12, 0.85, 7, 0.45], [0.39, 0.74, 20, 0.35]];
+    for (let index = 0; index < tufts.length; index += 1) {
+      const [x, y, angle, height] = tufts[index];
+      addMesh(head, cachedGeometry(`hair-quiff:${height}`, () => new THREE.ConeGeometry(0.145, height, 16)), index === 2 ? hairHighlight : hairMaterial, [x, y, 0.02], [1, 1, 0.92], [0, 0, angle * DEG]);
     }
+  } else if (includesAny(style, ["undercut", "fade"])) {
+    addSideburns(0.45);
+    cap.scale.y *= 0.86;
+    cap.position.y += 0.08;
+    for (const [x, y, angle] of [[-0.28, 0.72, -16], [0.01, 0.78, -4], [0.29, 0.72, 12]] as const) {
+      addMesh(head, cachedGeometry("hair-undercut-top", () => new THREE.CapsuleGeometry(0.13, 0.28, 6, 14)), x > 0 ? hairHighlight : hairMaterial, [x, y, 0.02], [1.12, 1, 1], [0, 0, angle * DEG]);
+    }
+  } else if (includesAny(style, ["long", "straight"])) {
+    addSideburns(1.45);
+    addMesh(head, cachedGeometry("hair-long-back", () => new THREE.CapsuleGeometry(0.35, 0.7, 10, 22)), hairMaterial, [0, -0.02, -0.43], [1.22, 1, 0.5]);
+    for (const side of [-1, 1]) addMesh(head, sideGeometry, side > 0 ? hairHighlight : hairMaterial, [side * 0.51, -0.03, 0.04], [1.12, 1.65, 1.06], [0, 0, side * -3 * DEG]);
   } else {
-    addMesh(head, new THREE.SphereGeometry(0.2, 18, 10), hairHighlight, [-0.08, 0.59, 0.48], [1.65, 0.25, 0.32], [0, 0, -7 * DEG]);
+    addSideburns(0.64);
+    addLock(-0.08, 0.61, 0.48, 1.65, 0.25, 0.31, -7, true);
   }
 }
 
@@ -420,36 +616,56 @@ function addOutfit(
   shirtShadow: CharacterMaterial,
   shirtAccent: CharacterMaterial,
   trouserMaterial: CharacterMaterial,
-): void {
-  const outfit = styleName(profile.outfitStyle);
-  addMesh(torso, new THREE.CylinderGeometry(0.43, 0.53, 0.82, 18), shirtMaterial, [0, 0, 0], [1, 1, 0.82]);
-  addMesh(torso, new THREE.CylinderGeometry(0.445, 0.54, 0.12, 18), shirtShadow, [0, -0.36, 0], [1, 1, 0.83]);
-  addMesh(torso, new THREE.TorusGeometry(0.17, 0.035, 9, 24), shirtAccent, [0, 0.38, 0.19], [1, 0.48, 0.9], [90 * DEG, 0, 0]);
+): string {
+  const outfit = resolveStyle(profile.outfitStyle, OUTFIT_STYLES, "tee");
+  const relaxed = includesAny(outfit, ["sweater", "hoodie"]);
+  addMesh(torso, cachedGeometry("outfit-torso", () => new THREE.CylinderGeometry(0.43, 0.53, 0.82, 24)), shirtMaterial, [0, 0, 0], [relaxed ? 1.05 : 1, 1, relaxed ? 0.87 : 0.82]);
+  addMesh(torso, cachedGeometry("outfit-hem", () => new THREE.CylinderGeometry(0.445, 0.54, 0.12, 24)), shirtShadow, [0, -0.36, 0], [relaxed ? 1.05 : 1, 1, 0.83]);
+  addMesh(torso, cachedGeometry("outfit-neckline", () => new THREE.TorusGeometry(0.17, 0.03, 10, 28)), shirtAccent, [0, 0.38, 0.19], [1, 0.48, 0.9], [90 * DEG, 0, 0]);
 
   if (includesAny(outfit, ["overall", "dungaree"])) {
-    addMesh(torso, new THREE.BoxGeometry(0.46, 0.48, 0.07), trouserMaterial, [0, -0.06, 0.405]);
+    addMesh(torso, cachedGeometry("overall-bib", () => new THREE.BoxGeometry(0.46, 0.48, 0.07)), trouserMaterial, [0, -0.06, 0.405]);
     for (const side of [-1, 1]) {
-      addMesh(torso, new THREE.BoxGeometry(0.075, 0.5, 0.06), trouserMaterial, [side * 0.21, 0.25, 0.38], [1, 1, 1], [0, 0, side * -8 * DEG]);
+      addMesh(torso, cachedGeometry("overall-strap", () => new THREE.BoxGeometry(0.075, 0.5, 0.06)), trouserMaterial, [side * 0.21, 0.25, 0.38], [1, 1, 1], [0, 0, side * -8 * DEG]);
+      addMesh(torso, cachedGeometry("overall-button", () => new THREE.SphereGeometry(0.03, 12, 8)), shirtAccent, [side * 0.18, 0.17, 0.45], [1, 1, 0.5]);
     }
-    addMesh(torso, new THREE.CircleGeometry(0.035, 12), shirtAccent, [0, -0.08, 0.45]);
+    addMesh(torso, cachedGeometry("overall-pocket", () => new THREE.BoxGeometry(0.22, 0.16, 0.035)), shirtAccent, [0, -0.09, 0.455]);
   } else if (includesAny(outfit, ["jacket", "coat", "blazer"])) {
     for (const side of [-1, 1]) {
-      addMesh(torso, new THREE.BoxGeometry(0.38, 0.7, 0.055), shirtShadow, [side * 0.19, -0.02, 0.405], [1, 1, 1], [0, 0, side * 2 * DEG]);
+      addMesh(torso, cachedGeometry("jacket-panel", () => new THREE.BoxGeometry(0.38, 0.7, 0.055)), shirtShadow, [side * 0.19, -0.02, 0.405], [1, 1, 1], [0, 0, side * 2 * DEG]);
+      addMesh(torso, cachedGeometry("jacket-lapel", () => new THREE.ConeGeometry(0.13, 0.38, 3)), shirtAccent, [side * 0.14, 0.17, 0.45], [1, 1, 0.4], [0, 0, side * 14 * DEG]);
     }
-    addMesh(torso, new THREE.BoxGeometry(0.025, 0.62, 0.025), shirtAccent, [0, -0.03, 0.45]);
+    addMesh(torso, cachedGeometry("jacket-seam", () => new THREE.BoxGeometry(0.025, 0.62, 0.025)), shirtAccent, [0, -0.03, 0.45]);
     for (const y of [0.12, -0.08, -0.28]) {
-      addMesh(torso, new THREE.SphereGeometry(0.028, 12, 8), shirtAccent, [0.045, y, 0.46], [1, 1, 0.5]);
+      addMesh(torso, cachedGeometry("jacket-button", () => new THREE.SphereGeometry(0.028, 12, 8)), shirtAccent, [0.045, y, 0.46], [1, 1, 0.5]);
     }
   } else if (includesAny(outfit, ["dress", "skirt"])) {
-    addMesh(hips, new THREE.CylinderGeometry(0.43, 0.68, 0.56, 18), shirtMaterial, [0, -0.05, 0], [1, 1, 0.86]);
-    addMesh(hips, new THREE.CylinderGeometry(0.69, 0.69, 0.07, 18), shirtAccent, [0, -0.32, 0], [1, 1, 0.86]);
+    addMesh(hips, cachedGeometry("dress-skirt", () => new THREE.CylinderGeometry(0.43, 0.68, 0.56, 28)), shirtMaterial, [0, -0.05, 0], [1, 1, 0.86]);
+    addMesh(hips, cachedGeometry("dress-hem", () => new THREE.CylinderGeometry(0.69, 0.69, 0.07, 28)), shirtAccent, [0, -0.32, 0], [1, 1, 0.86]);
+    addMesh(torso, cachedGeometry("dress-belt", () => new THREE.BoxGeometry(0.78, 0.08, 0.06)), shirtAccent, [0, -0.31, 0.36]);
   } else if (includesAny(outfit, ["sport", "athletic", "active"])) {
-    addMesh(torso, new THREE.BoxGeometry(0.08, 0.72, 0.04), shirtAccent, [0.28, -0.03, 0.42]);
-    addMesh(hips, new THREE.BoxGeometry(0.77, 0.22, 0.46), trouserMaterial, [0, -0.09, 0]);
+    addMesh(torso, cachedGeometry("sport-stripe", () => new THREE.BoxGeometry(0.08, 0.72, 0.04)), shirtAccent, [0.28, -0.03, 0.42]);
+    addMesh(hips, cachedGeometry("sport-shorts", () => new THREE.BoxGeometry(0.77, 0.22, 0.46)), trouserMaterial, [0, -0.09, 0]);
+    addMesh(torso, cachedGeometry("sport-number", () => new THREE.CircleGeometry(0.14, 24)), shirtAccent, [0, 0.03, 0.445], [1, 1, 1]);
+  } else if (includesAny(outfit, ["sweater", "jumper", "knit"])) {
+    for (const y of [-0.24, -0.1, 0.04]) addMesh(torso, cachedGeometry("sweater-rib", () => new THREE.BoxGeometry(0.67, 0.025, 0.025)), shirtAccent, [0, y, 0.435]);
+    addMesh(torso, cachedGeometry("sweater-patch", () => new THREE.CircleGeometry(0.1, 24)), shirtShadow, [0.22, 0.18, 0.445], [1, 0.72, 1]);
+  } else if (includesAny(outfit, ["sailor", "navy"])) {
+    addMesh(torso, cachedGeometry("sailor-collar", () => new THREE.CircleGeometry(0.34, 3)), shirtAccent, [0, 0.21, 0.43], [1.35, 0.9, 1], [0, 0, Math.PI]);
+    for (const side of [-1, 1]) addMesh(torso, cachedGeometry("sailor-bow", () => new THREE.ConeGeometry(0.105, 0.24, 3)), shirtShadow, [side * 0.105, 0.07, 0.47], [1, 1, 0.45], [0, 0, side * 90 * DEG]);
+    addMesh(torso, cachedGeometry("sailor-knot", () => new THREE.SphereGeometry(0.055, 14, 10)), shirtAccent, [0, 0.07, 0.49], [1, 1, 0.55]);
+  } else if (includesAny(outfit, ["hoodie", "hooded"])) {
+    addMesh(torso, cachedGeometry("hoodie-hood", () => new THREE.TorusGeometry(0.31, 0.095, 12, 30, Math.PI * 1.55)), shirtShadow, [0, 0.39, -0.03], [1, 0.9, 0.75], [90 * DEG, 0, -0.28 * Math.PI]);
+    addMesh(torso, cachedGeometry("hoodie-pocket", () => new THREE.BoxGeometry(0.42, 0.19, 0.055)), shirtAccent, [0, -0.2, 0.445]);
+    for (const side of [-1, 1]) {
+      addMesh(torso, cachedGeometry("hoodie-string", () => new THREE.CylinderGeometry(0.008, 0.008, 0.28, 8)), shirtAccent, [side * 0.09, 0.22, 0.46]);
+      addMesh(torso, cachedGeometry("hoodie-string-tip", () => new THREE.SphereGeometry(0.018, 10, 7)), shirtShadow, [side * 0.09, 0.07, 0.46]);
+    }
   } else {
-    addMesh(torso, new THREE.BoxGeometry(0.57, 0.055, 0.055), shirtAccent, [0, 0.16, 0.42], [1, 1, 1], [0, 0, -3 * DEG]);
-    addMesh(torso, new THREE.BoxGeometry(0.2, 0.15, 0.025), shirtShadow, [0.19, -0.11, 0.445], [1, 1, 1], [0, 0, -2 * DEG]);
+    addMesh(torso, cachedGeometry("tee-stripe", () => new THREE.BoxGeometry(0.57, 0.055, 0.055)), shirtAccent, [0, 0.16, 0.42], [1, 1, 1], [0, 0, -3 * DEG]);
+    addMesh(torso, cachedGeometry("tee-pocket", () => new THREE.BoxGeometry(0.2, 0.15, 0.025)), shirtShadow, [0.19, -0.11, 0.445], [1, 1, 1], [0, 0, -2 * DEG]);
   }
+  return outfit;
 }
 
 function addArm(
@@ -458,24 +674,30 @@ function addArm(
   skinMaterial: CharacterMaterial,
   shirtMaterial: CharacterMaterial,
   shirtAccent: CharacterMaterial,
+  outfitStyle: string,
 ): { shoulder: THREE.Group; arm: THREE.Group; forearm: THREE.Group; hand: THREE.Group } {
   const shoulder = joint(chest, side * 0.49, 0.25, 0);
   const arm = joint(shoulder, 0, 0, 0);
-  addMesh(arm, new THREE.CylinderGeometry(0.105, 0.09, 0.38, 16), shirtMaterial, [0, -0.18, 0]);
-  addMesh(arm, new THREE.CylinderGeometry(0.112, 0.112, 0.07, 16), shirtAccent, [0, -0.36, 0]);
+  const longSleeve = includesAny(outfitStyle, ["jacket", "sweater", "hoodie", "coat"]);
+  addMesh(arm, cachedGeometry("arm-upper", () => new THREE.CylinderGeometry(0.105, 0.09, 0.38, 18)), shirtMaterial, [0, -0.18, 0]);
+  addMesh(arm, cachedGeometry("sleeve-cuff", () => new THREE.CylinderGeometry(0.112, 0.112, 0.07, 18)), shirtAccent, [0, -0.36, 0]);
 
   const forearm = joint(arm, 0, -0.39, 0);
-  addMesh(forearm, new THREE.CylinderGeometry(0.085, 0.073, 0.38, 16), skinMaterial, [0, -0.18, 0]);
+  addMesh(forearm, cachedGeometry("arm-forearm", () => new THREE.CylinderGeometry(0.085, 0.073, 0.38, 18)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.18, 0]);
+  if (longSleeve) addMesh(forearm, cachedGeometry("wrist-cuff", () => new THREE.CylinderGeometry(0.088, 0.088, 0.07, 18)), shirtAccent, [0, -0.36, 0]);
   const hand = joint(forearm, 0, -0.39, 0);
-  addMesh(hand, new THREE.SphereGeometry(0.105, 16, 11), skinMaterial, [0, -0.055, 0.01], [0.82, 1.08, 0.7]);
+  addMesh(hand, cachedGeometry("hand-palm", () => new THREE.SphereGeometry(0.105, 18, 13)), skinMaterial, [0, -0.055, 0.01], [0.82, 1.08, 0.7]);
   addMesh(
     hand,
-    new THREE.SphereGeometry(0.058, 12, 8),
+    cachedGeometry("hand-thumb", () => new THREE.CapsuleGeometry(0.028, 0.055, 4, 10)),
     skinMaterial,
     [-side * 0.071, -0.045, 0.045],
-    [0.72, 1, 0.72],
+    [0.82, 1, 0.82],
     [0, 0, side * 24 * DEG],
   );
+  for (const offset of [-0.034, 0, 0.034]) {
+    addMesh(hand, cachedGeometry("hand-finger", () => new THREE.CapsuleGeometry(0.016, 0.055, 4, 9)), skinMaterial, [offset, -0.115, 0.035], [1, 1, 0.85]);
+  }
   return { shoulder, arm, forearm, hand };
 }
 
@@ -488,18 +710,57 @@ function addLeg(
   outfitStyle: string | number,
 ): { leg: THREE.Group; shin: THREE.Group; foot: THREE.Group } {
   const leg = joint(hips, side * 0.235, -0.18, 0);
-  const dress = includesAny(styleName(outfitStyle), ["dress", "skirt"]);
+  const resolvedOutfit = resolveStyle(outfitStyle, OUTFIT_STYLES, "tee");
+  const dress = includesAny(resolvedOutfit, ["dress", "skirt"]);
   const upperMaterial = dress ? skinMaterial : trouserMaterial;
-  addMesh(leg, new THREE.CylinderGeometry(0.13, 0.115, 0.5, 16), upperMaterial, [0, -0.24, 0]);
+  addMesh(leg, cachedGeometry("leg-upper", () => new THREE.CylinderGeometry(0.13, 0.115, 0.5, 18)), upperMaterial, [0, -0.24, 0]);
 
   const shin = joint(leg, 0, -0.5, 0);
-  addMesh(shin, new THREE.CylinderGeometry(0.11, 0.085, 0.47, 16), skinMaterial, [0, -0.22, 0]);
-  addMesh(shin, new THREE.CylinderGeometry(0.105, 0.105, 0.14, 16), shoeMaterial, [0, -0.4, 0]);
+  addMesh(shin, cachedGeometry("leg-shin", () => new THREE.CylinderGeometry(0.11, 0.085, 0.47, 18)), skinMaterial, [0, -0.22, 0]);
+  addMesh(shin, cachedGeometry("shoe-collar", () => new THREE.CylinderGeometry(0.105, 0.105, 0.14, 18)), shoeMaterial, [0, -0.4, 0]);
 
   const foot = joint(shin, 0, -0.47, 0.08);
-  addMesh(foot, new THREE.BoxGeometry(0.25, 0.15, 0.4), shoeMaterial, [0, -0.015, 0.1], [1, 1, 1]);
-  addMesh(foot, new THREE.BoxGeometry(0.27, 0.045, 0.42), material("#e9edf0"), [0, -0.1, 0.11]);
+  addMesh(foot, cachedGeometry("shoe-upper", () => new THREE.CapsuleGeometry(0.105, 0.2, 6, 16)), shoeMaterial, [0, -0.015, 0.105], [1.08, 1, 1], [90 * DEG, 0, 0]);
+  addMesh(foot, cachedGeometry("shoe-toe", () => new THREE.SphereGeometry(0.12, 18, 12)), shoeMaterial, [0, -0.02, 0.28], [1.08, 0.72, 1.15]);
+  addMesh(foot, cachedGeometry("shoe-sole", () => new THREE.BoxGeometry(0.27, 0.045, 0.43)), material("#e9edf0"), [0, -0.11, 0.12]);
+  addMesh(foot, cachedGeometry("shoe-lace", () => new THREE.BoxGeometry(0.12, 0.018, 0.11)), material("#d7dde2"), [0, 0.07, 0.15], [1, 1, 1], [0, 0, 0]);
   return { leg, shin, foot };
+}
+
+function createHeadGeometry(faceStyle: string): THREE.BufferGeometry {
+  return cachedGeometry(`face:${faceStyle}`, () => {
+    const geometry = new THREE.SphereGeometry(0.62, 36, 26);
+    const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    for (let index = 0; index < position.count; index += 1) {
+      const x = position.getX(index);
+      const y = position.getY(index);
+      const z = position.getZ(index);
+      const normalizedY = THREE.MathUtils.clamp(y / 0.62, -1, 1);
+      let width = 1;
+      let depth = 1;
+      if (faceStyle === "heart") {
+        width = THREE.MathUtils.lerp(0.82, 1.08, (normalizedY + 1) * 0.5);
+        depth = THREE.MathUtils.lerp(0.94, 1.02, (normalizedY + 1) * 0.5);
+      } else if (faceStyle === "soft-square") {
+        width = 1 + 0.075 * (1 - Math.abs(normalizedY));
+        if (normalizedY < -0.35) width *= 1.035;
+        depth = 0.96;
+      } else if (faceStyle === "broad") {
+        width = 1.07 + 0.04 * (1 - Math.abs(normalizedY));
+        depth = 0.98;
+      } else if (faceStyle === "slim") {
+        width = THREE.MathUtils.lerp(0.86, 0.96, (normalizedY + 1) * 0.5);
+        depth = 0.95;
+      } else if (faceStyle === "oval") {
+        width = 0.96;
+        depth = 0.98;
+      }
+      position.setXYZ(index, x * width, y, z * depth);
+    }
+    position.needsUpdate = true;
+    geometry.computeVertexNormals();
+    return geometry;
+  });
 }
 
 /** Build a self-contained, shadow-ready cartoon resident and animation rig. */
@@ -512,7 +773,7 @@ export function createCharacter(profile: CharacterProfile): Character {
 
   const root = joint(group, 0, 0, 0);
   root.name = "motion-root";
-  const hips = joint(root, 0, 1.14, 0);
+  const hips = joint(root, 0, 1.13, 0);
   hips.name = "hips";
   const torso = joint(hips, 0, 0.43, 0);
   torso.name = "torso";
@@ -533,51 +794,53 @@ export function createCharacter(profile: CharacterProfile): Character {
   const trouserMaterial = material("#405b72", { surface: "fabric" });
   const shoeMaterial = material("#303946", { surface: "leather" });
 
-  addOutfit(torso, hips, profile, shirtMaterial, shirtShadow, shirtAccent, trouserMaterial);
-  addMesh(neck, new THREE.CylinderGeometry(0.16, 0.18, 0.25, 16), skinMaterial, [0, -0.08, 0]);
+  const outfitStyle = addOutfit(torso, hips, profile, shirtMaterial, shirtShadow, shirtAccent, trouserMaterial);
+  addMesh(neck, cachedGeometry("neck", () => new THREE.CylinderGeometry(0.16, 0.18, 0.25, 20)), skinMaterial, [0, -0.08, 0]);
 
-  const face = styleName(profile.faceShape);
-  const headScale: readonly [number, number, number] = includesAny(face, ["round", "wide", "soft"])
-    ? [1.03, 0.94, 0.94]
-    : includesAny(face, ["long", "oval", "slim"])
-      ? [0.88, 1.08, 0.91]
-      : includesAny(face, ["square", "angular"])
-        ? [0.98, 0.98, 0.9]
-        : [0.94, 1.02, 0.92];
-  const headMesh = addMesh(head, new THREE.SphereGeometry(0.62, 28, 20), skinMaterial, [0, 0.25, 0], headScale);
+  const face = resolveFaceStyle(profile.faceShape);
+  const headScale: readonly [number, number, number] = face === "round"
+    ? [1.02, 0.98, 0.96]
+    : face === "oval"
+      ? [0.94, 1.07, 0.94]
+      : face === "soft-square"
+        ? [0.99, 1, 0.94]
+        : face === "heart"
+          ? [1, 1.02, 0.94]
+          : face === "slim"
+            ? [0.92, 1.08, 0.93]
+            : [1.04, 0.98, 0.95];
+  const headMesh = addMesh(head, createHeadGeometry(face), skinMaterial, [0, 0.25, 0], headScale);
   headMesh.name = "face";
-  if (includesAny(face, ["square", "angular"])) {
-    headMesh.geometry = new THREE.SphereGeometry(0.62, 12, 9);
-  }
 
   addHair(head, profile, headScale, hairMaterial, hairHighlight);
-  const eyeStyle = styleName(profile.eyeStyle);
+  const eyeStyle = resolveStyle(profile.eyeStyle, EYE_STYLES, "classic");
   const eyes = joint(head, 0, 0, 0);
   eyes.name = "eyes";
   const leftEye = createEye(eyes, -0.2, eyeStyle, skinMaterial);
   const rightEye = createEye(eyes, 0.2, eyeStyle, skinMaterial);
   leftEye.name = "left-eye";
   rightEye.name = "right-eye";
-  const browStyle = styleName(profile.browStyle);
+  const browStyle = resolveStyle(profile.browStyle, BROW_STYLES, "soft");
   const leftBrow = createBrow(head, -0.2, browStyle, hairMaterial);
   const rightBrow = createBrow(head, 0.2, browStyle, hairMaterial);
   leftBrow.name = "left-brow";
   rightBrow.name = "right-brow";
-  createNose(head, styleName(profile.noseStyle), skinShadow);
-  const mouth = createMouth(head, styleName(profile.mouthStyle));
+  createNose(head, resolveStyle(profile.noseStyle, NOSE_STYLES, "button"), skinShadow);
+  const mouth = createMouth(head, resolveStyle(profile.mouthStyle, MOUTH_STYLES, "smile"));
   mouth.name = "mouth";
 
   // Ears and subtle cheeks break up the face silhouette without noisy outlines.
   for (const side of [-1, 1]) {
-    addMesh(head, new THREE.SphereGeometry(0.105, 12, 8), skinMaterial, [side * 0.59 * headScale[0], 0.24, -0.01], [0.62, 1, 0.52]);
-    addMesh(head, new THREE.CircleGeometry(0.075, 16), material("#e88486", { transparent: true, opacity: 0.28, surface: "skin" }), [side * 0.34, 0.11, 0.545], [1.25, 0.58, 1]);
+    addMesh(head, cachedGeometry("ear-outer", () => new THREE.SphereGeometry(0.105, 18, 12)), skinMaterial, [side * 0.59 * headScale[0], 0.24, -0.01], [0.62, 1, 0.52]);
+    addMesh(head, cachedGeometry("ear-inner", () => new THREE.TorusGeometry(0.052, 0.012, 7, 18, Math.PI * 1.35)), skinShadow, [side * 0.603 * headScale[0], 0.24, 0.035], [0.58, 1, 0.5], [0, 0, side < 0 ? -0.2 * Math.PI : 0.45 * Math.PI]);
+    addMesh(head, cachedGeometry("cheek", () => new THREE.CircleGeometry(0.075, 18)), material("#e88486", { transparent: true, opacity: 0.24, surface: "skin" }), [side * 0.34, 0.11, 0.545], [1.25, 0.58, 1]);
   }
 
   addTraitDetail(chest, head, profile.trait, shirtAccent, material("#293547", { surface: "leather" }));
-  const left = addArm(chest, -1, skinMaterial, shirtMaterial, shirtAccent);
-  const right = addArm(chest, 1, skinMaterial, shirtMaterial, shirtAccent);
-  const leftLeg = addLeg(hips, -1, skinMaterial, trouserMaterial, shoeMaterial, profile.outfitStyle);
-  const rightLeg = addLeg(hips, 1, skinMaterial, trouserMaterial, shoeMaterial, profile.outfitStyle);
+  const left = addArm(chest, -1, skinMaterial, shirtMaterial, shirtAccent, outfitStyle);
+  const right = addArm(chest, 1, skinMaterial, shirtMaterial, shirtAccent, outfitStyle);
+  const leftLeg = addLeg(hips, -1, skinMaterial, trouserMaterial, shoeMaterial, outfitStyle);
+  const rightLeg = addLeg(hips, 1, skinMaterial, trouserMaterial, shoeMaterial, outfitStyle);
 
   const joints: CharacterJoints = {
     root,
@@ -647,6 +910,36 @@ function setScaleY(object: THREE.Object3D, y: number, delta: number, speed = 18)
   object.scale.y = damp(object.scale.y, y, speed, delta);
 }
 
+function updateMouthExpression(
+  mouth: THREE.Group,
+  openness: number,
+  state: CharacterState,
+  delta: number,
+): void {
+  const rest = mouth.userData.rest as THREE.Group | undefined;
+  const open = mouth.userData.open as THREE.Group | undefined;
+  if (!rest || !open) return;
+  const baseOpen = Boolean(mouth.userData.baseOpen);
+  const targetOpen = THREE.MathUtils.clamp(Math.max(openness, baseOpen && state === "idle" ? 0.62 : 0), 0, 1);
+  const currentOpen = Number.isFinite(open.userData.amount) ? Number(open.userData.amount) : targetOpen;
+  const amount = damp(currentOpen, targetOpen, 22, delta);
+  open.userData.amount = amount;
+  open.visible = amount > 0.035;
+  rest.visible = amount < 0.72;
+  open.scale.y = damp(open.scale.y, 0.12 + amount * 0.92, 20, delta);
+  open.scale.x = damp(open.scale.x, state === "happy" ? 1.16 : state === "sad" ? 0.82 : 1, 14, delta);
+  rest.scale.y = damp(rest.scale.y, state === "happy" ? 1.12 : state === "sad" ? 0.78 : 1, 14, delta);
+  rest.rotation.z = damp(rest.rotation.z, state === "sad" ? Math.PI : 0, 12, delta);
+  mouth.position.y = damp(mouth.position.y, state === "sad" ? 0.02 : state === "happy" ? 0.055 : 0.04, 12, delta);
+}
+
+function profileBlinkOffset(profile: CharacterProfile): number {
+  const value = `${profile.id}:${profile.name}`;
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) hash = (hash * 31 + value.charCodeAt(index)) % 997;
+  return hash / 997;
+}
+
 /**
  * Pose a character for the supplied state. `time` is elapsed seconds and
  * `delta` is the frame duration; both can come directly from THREE.Clock.
@@ -691,7 +984,8 @@ export function updateCharacter(
   let rightFootX = 0;
   let browLeftZ = 0;
   let browRightZ = 0;
-  let mouthOpen = 0.08;
+  let browOffsetY = 0;
+  let mouthOpen = 0;
 
   switch (state) {
     case "walk": {
@@ -747,7 +1041,9 @@ export function updateCharacter(
       rightForearmX = -0.72 + beat * 0.24;
       rightForearmZ = -0.18;
       leftArmZ = -0.16;
-      mouthOpen = 0.15 + (Math.sin(elapsed * 13) * 0.5 + 0.5) * 0.7;
+      const syllable = Math.sin(elapsed * 13.2) * 0.62 + Math.sin(elapsed * 7.1) * 0.24;
+      mouthOpen = 0.24 + Math.max(0, syllable) * 0.72;
+      browOffsetY = Math.sin(elapsed * 2.6) * 0.015;
       break;
     }
     case "eat": {
@@ -762,7 +1058,7 @@ export function updateCharacter(
       rightForearmX = -1.22 + bite * 0.24;
       leftForearmZ = 0.11;
       rightForearmZ = -0.11;
-      mouthOpen = 0.12 + bite * 0.78;
+      mouthOpen = bite > 0.58 ? 0.78 : 0.12 + bite * 0.18;
       break;
     }
     case "sit": {
@@ -797,7 +1093,8 @@ export function updateCharacter(
       rightLegX = -Math.sin(elapsed * 6.4) * 0.08;
       browLeftZ = -0.08;
       browRightZ = 0.08;
-      mouthOpen = 0.28;
+      browOffsetY = 0.025;
+      mouthOpen = 0.56 + Math.max(0, bounce) * 0.18;
       break;
     }
     case "sad": {
@@ -815,7 +1112,8 @@ export function updateCharacter(
       rightForearmX = -0.12;
       browLeftZ = 0.2;
       browRightZ = -0.2;
-      mouthOpen = 0.04;
+      browOffsetY = -0.035;
+      mouthOpen = 0;
       break;
     }
     case "idle":
@@ -846,11 +1144,30 @@ export function updateCharacter(
   setRotation(joints.rightFoot, rightFootX, 0, 0, dt);
   setRotation(joints.leftBrow, 0, 0, browLeftZ, dt);
   setRotation(joints.rightBrow, 0, 0, browRightZ, dt);
-  setScaleY(joints.mouth, mouthOpen, dt);
+  setPositionY(joints.leftBrow, Number(joints.leftBrow.userData.baseY ?? 0.46) + browOffsetY, dt);
+  setPositionY(joints.rightBrow, Number(joints.rightBrow.userData.baseY ?? 0.46) + browOffsetY, dt);
+  updateMouthExpression(joints.mouth, mouthOpen, state, dt);
 
-  // A short, infrequent blink. Emotion states remain readable between blinks.
-  const blinkCycle = (time + String(character.profile.id).length * 0.37) % 4.15;
-  const blink = blinkCycle > 3.94 ? 0.08 : 1;
-  setScaleY(joints.leftEye, blink, dt, 30);
-  setScaleY(joints.rightEye, blink, dt, 30);
+  // Ease through a complete lid closure instead of snapping between two scales.
+  const cycleLength = 4.1 + profileBlinkOffset(character.profile) * 1.35;
+  const blinkCycle = (time + profileBlinkOffset(character.profile) * cycleLength) % cycleLength;
+  const blinkStart = cycleLength - 0.25;
+  const blinkWave = blinkCycle > blinkStart
+    ? Math.sin(((blinkCycle - blinkStart) / (cycleLength - blinkStart)) * Math.PI)
+    : 0;
+  let leftBlink = 1 - blinkWave * 0.94;
+  let rightBlink = leftBlink;
+  if (state === "happy") {
+    const happySquint = 0.28 + Math.max(0, Math.sin(elapsed * 6.4)) * 0.16;
+    leftBlink = Math.min(leftBlink, happySquint);
+    rightBlink = Math.min(rightBlink, happySquint);
+  } else if (state === "sad") {
+    leftBlink = Math.min(leftBlink, 0.7);
+    rightBlink = Math.min(rightBlink, 0.7);
+  } else if (state === "eat" && Math.sin(elapsed * 4.2) > 0.82) {
+    leftBlink = Math.min(leftBlink, 0.36);
+    rightBlink = Math.min(rightBlink, 0.36);
+  }
+  setScaleY(joints.leftEye, leftBlink, dt, 30);
+  setScaleY(joints.rightEye, rightBlink, dt, 30);
 }
