@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
   createCharacter,
+  groundCharacterToPlane,
   updateCharacter,
   type Character,
   type CharacterProfile,
@@ -15,6 +16,7 @@ import {
   type CircularObstacle,
   type PointLike,
   type ResidentDefinition,
+  type ResidentHandle,
 } from "./game/worldSystems";
 
 type Props = {
@@ -43,6 +45,7 @@ type WorldRuntime = {
   characters: Character[];
   clock: THREE.Clock;
   focus: CameraFocus | null;
+  controlMode: "auto" | "keyboard" | "pointer";
 };
 type WeatherLayer = { group: THREE.Object3D; update: (time: number) => void };
 
@@ -275,6 +278,74 @@ const TOWN_OBSTACLES: CircularObstacle[] = [
   { position: [-8.5, 10.2], radius: 2.25 },
 ];
 
+// The current home map replaced the old lily pond with a walkable promenade;
+// keep that legacy pond collider only in the plaza/cafe version of the town.
+const HOME_OBSTACLES = TOWN_OBSTACLES.slice(0, -1);
+
+const INDOOR_BOUNDS = { minX: -4.1, maxX: 4.1, minZ: -3.2, maxZ: 3.35, y: 0 };
+const OUTDOOR_BOUNDS = { minX: -19, maxX: 19, minZ: -16.5, maxZ: 16.5, y: 0 };
+
+function pointXZ(point: PointLike): readonly [number, number] {
+  if ("x" in point) return [point.x, point.z];
+  return point.length > 2 ? [point[0], point[2]] : [point[0], point[1]];
+}
+
+function segmentClearsObstacles(
+  start: THREE.Vector3,
+  destination: THREE.Vector3,
+  obstacles: readonly CircularObstacle[],
+  residentRadius: number,
+): boolean {
+  const segmentX = destination.x - start.x;
+  const segmentZ = destination.z - start.z;
+  const lengthSquared = segmentX * segmentX + segmentZ * segmentZ;
+  for (const obstacle of obstacles) {
+    const [obstacleX, obstacleZ] = pointXZ(obstacle.position);
+    const projection = lengthSquared > 0.0001
+      ? THREE.MathUtils.clamp(
+          ((obstacleX - start.x) * segmentX + (obstacleZ - start.z) * segmentZ) / lengthSquared,
+          0,
+          1,
+        )
+      : 0;
+    const nearestX = start.x + segmentX * projection;
+    const nearestZ = start.z + segmentZ * projection;
+    const clearance = Math.max(0, obstacle.radius) + residentRadius + 0.1;
+    const dx = nearestX - obstacleX;
+    const dz = nearestZ - obstacleZ;
+    if (dx * dx + dz * dz < clearance * clearance) return false;
+  }
+  return true;
+}
+
+function minimumCollisionClearance(
+  residents: readonly ResidentHandle[],
+  obstacles: readonly CircularObstacle[],
+): number {
+  let minimum = Number.POSITIVE_INFINITY;
+  const positions = residents.map((resident) => resident.group.getWorldPosition(new THREE.Vector3()));
+  for (let index = 0; index < residents.length; index += 1) {
+    const resident = residents[index]!;
+    const position = positions[index]!;
+    for (const obstacle of obstacles) {
+      const [x, z] = pointXZ(obstacle.position);
+      minimum = Math.min(
+        minimum,
+        Math.hypot(position.x - x, position.z - z) - resident.radius - Math.max(0, obstacle.radius) - 0.035,
+      );
+    }
+    for (let otherIndex = index + 1; otherIndex < residents.length; otherIndex += 1) {
+      const other = residents[otherIndex]!;
+      const otherPosition = positions[otherIndex]!;
+      minimum = Math.min(
+        minimum,
+        Math.hypot(position.x - otherPosition.x, position.z - otherPosition.z) - resident.radius - other.radius - 0.045,
+      );
+    }
+  }
+  return minimum;
+}
+
 function sceneName(value: string): TownSceneName {
   return value === "plaza" || value === "cafe" || value === "shop" || value === "interior"
     ? value
@@ -298,31 +369,6 @@ function chooseResidents(
     }
   }
   return ordered.slice(0, 6);
-}
-
-const HOME_AVATAR_ASSETS = [
-  "avatars/v4-xiaoman.png",
-  "avatars/v4-aqi.png",
-  "avatars/v4-lulu.png",
-] as const;
-
-function homeAvatarAsset(profile: CharacterProfile, index: number): string {
-  const id = String(profile.id);
-  if (id === "1") return HOME_AVATAR_ASSETS[0];
-  if (id === "2") return HOME_AVATAR_ASSETS[1];
-  if (id === "3") return HOME_AVATAR_ASSETS[2];
-  const style = Number.parseInt(String(profile.hairStyle), 10);
-  return HOME_AVATAR_ASSETS[(Number.isFinite(style) ? Math.abs(style) : index) % HOME_AVATAR_ASSETS.length];
-}
-
-function homePortraitResidents(
-  residents: CharacterProfile[],
-  selectedId: string | number,
-): CharacterProfile[] {
-  const firstThree = residents.slice(0, 3);
-  if (firstThree.some((resident) => String(resident.id) === String(selectedId))) return firstThree;
-  const selected = residents.find((resident) => String(resident.id) === String(selectedId));
-  return selected ? [selected, ...firstThree.slice(0, 2)] : firstThree;
 }
 
 function prepareProfile(profile: CharacterProfile): CharacterProfile {
@@ -369,6 +415,7 @@ function createNameTag(name: string): THREE.Sprite {
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.mapping = THREE.EquirectangularReflectionMapping;
   texture.minFilter = THREE.LinearFilter;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
@@ -414,11 +461,11 @@ function createCharacterContactShadow(): THREE.Mesh {
   texture.magFilter = THREE.LinearFilter;
   texture.generateMipmaps = false;
   const shadow = new THREE.Mesh(
-    new THREE.PlaneGeometry(2.05, 1.28),
+    new THREE.PlaneGeometry(1.28, 0.62),
     new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
-      opacity: 0.52,
+      opacity: 0.48,
       depthWrite: false,
       toneMapped: false,
     }),
@@ -463,7 +510,7 @@ function createSkyTexture(timeOfDay: TimeOfDay): THREE.CanvasTexture {
   const context = canvas.getContext("2d");
   if (context) {
     const palette = timeOfDay === "night"
-      ? ["#101a38", "#223d67", "#5d7392", "#c3a99d"]
+      ? ["#18264c", "#315582", "#7d94b4", "#d8b9a8"]
       : timeOfDay === "sunset"
         ? ["#667fc4", "#e9a37f", "#f6c68c", "#f7e0ba"]
         : ["#3f9fe8", "#78c7f2", "#bce7f7", "#edf7ef"];
@@ -642,15 +689,12 @@ export default function World3D({
     queueMicrotask(() => setRenderState("loading"));
 
     const location = sceneName(scene);
-    const homePlate = location === "home";
     const indoor = location === "shop" || location === "interior";
+    const sceneObstacles = indoor ? [] : location === "home" ? HOME_OBSTACLES : TOWN_OBSTACLES;
     const composition = SCENE_COMPOSITIONS[location];
-    // The home screen shares the close, three-resident composition used by the
-    // immersive view, so the playable first impression matches the key art.
-    const cinematic = !indoor && (cinematicView || location === "home")
+    const cinematic = !indoor && cinematicView
       ? CINEMATIC_VIEWS[location]
       : undefined;
-    const stagedHomeOpening = location === "home" && Boolean(cinematic);
     const viewCamera = cinematic?.camera ?? composition.camera;
     const viewTarget = cinematic?.target ?? composition.target;
     const viewFov = cinematic?.fov ?? (indoor ? 34 : 33);
@@ -660,15 +704,16 @@ export default function World3D({
     );
     const world = new THREE.Scene();
     world.name = "Sunny Side Stories";
-    world.background = homePlate ? null : createSkyTexture(timeOfDay);
+    const skyTexture = createSkyTexture(timeOfDay);
+    world.background = skyTexture;
+    world.environment = skyTexture;
+    world.environmentIntensity = indoor ? 0.42 : timeOfDay === "night" ? 0.28 : 0.48;
     const fogColor = timeOfDay === "night" ? "#243653" : timeOfDay === "sunset" ? "#ddb8a8" : "#c9e9f3";
-    world.fog = homePlate
-      ? null
-      : new THREE.Fog(
-          fogColor,
-          indoor ? 18 : timeOfDay === "night" ? 31 : 42,
-          indoor ? 48 : timeOfDay === "night" ? 82 : 110,
-        );
+    world.fog = new THREE.Fog(
+      fogColor,
+      indoor ? 18 : timeOfDay === "night" ? 38 : 42,
+      indoor ? 48 : timeOfDay === "night" ? 82 : 110,
+    );
 
     const width = Math.max(1, element.clientWidth);
     const height = Math.max(1, element.clientHeight);
@@ -680,7 +725,7 @@ export default function World3D({
     try {
       renderer = new THREE.WebGLRenderer({
         antialias: true,
-        alpha: homePlate,
+        alpha: false,
         powerPreference: "high-performance",
       });
     } catch {
@@ -689,24 +734,23 @@ export default function World3D({
     }
     renderer.setSize(width, height, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    if (homePlate) renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 0.96 : 0.8) : timeOfDay === "sunset" ? 1.02 : 1.12;
+    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 1.12 : 1.24) : timeOfDay === "sunset" ? 1.08 : 1.12;
     renderer.domElement.style.imageRendering = "auto";
     element.replaceChildren(renderer.domElement);
 
     const skyLight = new THREE.HemisphereLight(
       timeOfDay === "night" ? "#7894c8" : timeOfDay === "sunset" ? "#ffe1c4" : "#e6f6ff",
       timeOfDay === "night" ? "#18243d" : timeOfDay === "sunset" ? "#806a72" : "#a8bb91",
-      indoor ? (timeOfDay === "night" ? 0.76 : 1.2) : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.78 : 1.02,
+      indoor ? (timeOfDay === "night" ? 1.02 : 1.2) : timeOfDay === "night" ? 1.16 : timeOfDay === "sunset" ? 0.92 : 1.02,
     );
     world.add(skyLight);
     const sun = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#aac8ff" : timeOfDay === "sunset" ? "#ffb06d" : "#fff1d2",
-      indoor ? (timeOfDay === "night" ? 0.76 : 1.38) : timeOfDay === "night" ? 0.98 : timeOfDay === "sunset" ? 2.05 : 1.96,
+      indoor ? (timeOfDay === "night" ? 1.02 : 1.38) : timeOfDay === "night" ? 1.08 : timeOfDay === "sunset" ? 2.05 : 1.96,
     );
     sun.position.copy(composition.target).add(
       timeOfDay === "sunset" ? new THREE.Vector3(-24, 12, 10) : new THREE.Vector3(-17, 26, 15),
@@ -727,14 +771,38 @@ export default function World3D({
     world.add(sun, sun.target);
     const fill = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#5579c2" : timeOfDay === "sunset" ? "#9f8bd5" : "#badff0",
-      indoor ? 0.5 : timeOfDay === "night" ? 0.4 : timeOfDay === "sunset" ? 0.3 : 0.32,
+      indoor ? 0.5 : timeOfDay === "night" ? 0.84 : timeOfDay === "sunset" ? 0.38 : 0.32,
     );
     fill.position.copy(composition.target).add(new THREE.Vector3(16, 9, -12));
     world.add(fill);
+    const portraitFill = new THREE.DirectionalLight(
+      timeOfDay === "night" ? "#ffe5be" : "#fff7e8",
+      indoor ? 0.18 : timeOfDay === "night" ? 0.52 : 0.16,
+    );
+    portraitFill.position.copy(viewCamera);
+    portraitFill.target.position.copy(viewTarget);
+    world.add(portraitFill, portraitFill.target);
+    if (!indoor && timeOfDay !== "day") {
+      const lampOffsets = [
+        new THREE.Vector3(-3.8, 3.15, 2.8),
+        new THREE.Vector3(3.5, 3.05, -1.8),
+        new THREE.Vector3(0.4, 2.75, 5.1),
+      ];
+      for (const offset of lampOffsets) {
+        const lampGlow = new THREE.PointLight(
+          timeOfDay === "night" ? "#ffd38a" : "#ffca8c",
+          timeOfDay === "night" ? 0.72 : 0.34,
+          14,
+          1.65,
+        );
+        lampGlow.position.copy(composition.target).add(offset);
+        world.add(lampGlow);
+      }
+    }
     if (!indoor) {
       const softAmbient = new THREE.AmbientLight(
         timeOfDay === "night" ? "#7390c4" : timeOfDay === "sunset" ? "#ffe1c8" : "#fff9e9",
-        timeOfDay === "night" ? 0.04 : timeOfDay === "sunset" ? 0.06 : 0.08,
+        timeOfDay === "night" ? 0.3 : timeOfDay === "sunset" ? 0.1 : 0.08,
       );
       world.add(softAmbient);
     }
@@ -744,7 +812,7 @@ export default function World3D({
     }
 
     const town = createTown(location);
-    town.group.visible = !homePlate;
+    town.group.visible = true;
     world.add(town.group);
 
     const characterByGroup = new Map<THREE.Group, Character>();
@@ -754,8 +822,8 @@ export default function World3D({
       character.group.position.copy(start);
       const sceneScale = location === "home"
         ? index === 0
-          ? 0.99
-          : 0.94 + (index % 2) * 0.012
+          ? 0.74
+          : 0.71 + (index % 2) * 0.012
         : index === 0
           ? indoor
             ? 0.56
@@ -795,14 +863,7 @@ export default function World3D({
     const definitions: ResidentDefinition[] = characters.map((character, index) => ({
       id: String(character.profile.id),
       group: character.group,
-      initialState:
-        stagedHomeOpening && index < 3
-          ? "idle"
-          : index === 0
-            ? "idle"
-            : index % 3 === 0
-              ? "walk"
-              : "idle",
+      initialState: index === 0 ? "walk" : index % 3 === 2 ? "idle" : "walk",
       targetPoints: composition.points,
       walkSpeed: (indoor ? 0.42 : 0.58) + (index % 3) * 0.05,
       runSpeed: (indoor ? 0.78 : 1.15) + (index % 2) * 0.1,
@@ -810,7 +871,7 @@ export default function World3D({
       turnSpeed: 7.5,
       acceleration: 7,
       durations: {
-        idle: stagedHomeOpening && index < 3 ? [3600, 3600] : [1.4, 3.6],
+        idle: [1.4, 3.6],
         walk: [3.8, 7.5],
         run: [2.2, 4.2],
         talk: [4.4, 7.2],
@@ -823,15 +884,13 @@ export default function World3D({
     const director = createWorldDirector({
       residents: definitions,
       targetPoints: composition.points as PointLike[],
-      bounds: indoor
-        ? { minX: -4.1, maxX: 4.1, minZ: -3.2, maxZ: 3.35, y: 0 }
-        : { minX: -19, maxX: 19, minZ: -16.5, maxZ: 16.5, y: 0 },
-      obstacles: indoor ? [] : TOWN_OBSTACLES,
+      bounds: indoor ? INDOOR_BOUNDS : OUTDOOR_BOUNDS,
+      obstacles: sceneObstacles,
       arrivalDistance: 0.14,
       avoidancePadding: 0.22,
       avoidanceStrength: 1.7,
       conversationDistance: 1.55,
-      conversationRate: stagedHomeOpening ? 0 : 0.3,
+      conversationRate: 0.3,
       conversationCooldown: 5,
       camera,
       cameraOptions: {
@@ -847,8 +906,12 @@ export default function World3D({
       },
     });
     director.camera?.cut(viewCamera, viewTarget, viewFov);
+    // The first resident is the player avatar. Keep them at the readable
+    // arrival spot until the player gives keyboard or pointer input, while
+    // every other resident continues their autonomous town routine.
+    director.setControl(selected.group, { direction: [0, 0], run: false });
 
-    if (!stagedHomeOpening && director.residents[1] && director.residents[2]) {
+    if (director.residents[1] && director.residents[2]) {
       director.startConversation(director.residents[1], director.residents[2], 6.5);
     }
     if (director.residents[3]) director.setState(director.residents[3], "eat", { duration: 5.6 });
@@ -866,7 +929,115 @@ export default function World3D({
     if (weather) world.add(weather.group);
 
     const clock = new THREE.Clock();
-    runtimeRef.current = { director, characters, clock, focus: null };
+    runtimeRef.current = { director, characters, clock, focus: null, controlMode: "auto" };
+    const pressedKeys = new Set<string>();
+    const movementKeys = new Set([
+      "KeyW",
+      "KeyA",
+      "KeyS",
+      "KeyD",
+      "ArrowUp",
+      "ArrowLeft",
+      "ArrowDown",
+      "ArrowRight",
+    ]);
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      return target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      if (movementKeys.has(event.code)) {
+        event.preventDefault();
+        pressedKeys.add(event.code);
+        const runtime = runtimeRef.current;
+        if (runtime?.director === director) {
+          runtime.controlMode = "keyboard";
+          runtime.focus = null;
+        }
+      } else if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
+        pressedKeys.add(event.code);
+      }
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (movementKeys.has(event.code)) event.preventDefault();
+      pressedKeys.delete(event.code);
+    };
+    const handleWindowBlur = () => {
+      pressedKeys.clear();
+      const runtime = runtimeRef.current;
+      if (runtime?.director === director && runtime.controlMode === "keyboard") {
+        director.setControl(selected.group, { direction: [0, 0], run: false });
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, { passive: false });
+    window.addEventListener("keyup", handleKeyUp, { passive: false });
+    window.addEventListener("blur", handleWindowBlur);
+
+    const navigationBounds = indoor ? INDOOR_BOUNDS : OUTDOOR_BOUNDS;
+    const navigationObstacles = sceneObstacles;
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
+    const pointerDestination = new THREE.Vector3();
+    const pointerStart = new THREE.Vector3();
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      const rectangle = renderer.domElement.getBoundingClientRect();
+      if (rectangle.width < 1 || rectangle.height < 1) return;
+      pointerNdc.set(
+        ((event.clientX - rectangle.left) / rectangle.width) * 2 - 1,
+        -((event.clientY - rectangle.top) / rectangle.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(pointerNdc, camera);
+      if (!raycaster.ray.intersectPlane(groundPlane, pointerDestination)) return;
+      const selectedResident = director.residents[0];
+      if (!selectedResident) return;
+      pointerDestination.x = THREE.MathUtils.clamp(
+        pointerDestination.x,
+        navigationBounds.minX + selectedResident.radius,
+        navigationBounds.maxX - selectedResident.radius,
+      );
+      pointerDestination.z = THREE.MathUtils.clamp(
+        pointerDestination.z,
+        navigationBounds.minZ + selectedResident.radius,
+        navigationBounds.maxZ - selectedResident.radius,
+      );
+      pointerDestination.y = 0;
+      selected.group.getWorldPosition(pointerStart);
+      if (!segmentClearsObstacles(
+        pointerStart,
+        pointerDestination,
+        navigationObstacles,
+        selectedResident.radius,
+      )) return;
+      director.setControl(selectedResident, { destination: pointerDestination, run: false });
+      const runtime = runtimeRef.current;
+      if (runtime?.director === director) {
+        runtime.controlMode = "pointer";
+        runtime.focus = null;
+      }
+      renderer.domElement.focus({ preventScroll: true });
+    };
+    renderer.domElement.tabIndex = 0;
+    renderer.domElement.style.touchAction = "none";
+    renderer.domElement.style.cursor = "crosshair";
+    renderer.domElement.title = "WASD / 方向键移动，按住 Shift 奔跑，也可点击道路前往";
+    renderer.domElement.addEventListener("pointerdown", handlePointerDown);
+    const handlePhoto = () => {
+      renderer.domElement.toBlob((blob) => {
+        if (!blob) return;
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const stamp = new Date().toISOString().replaceAll(":", "-").replace("T", "-").slice(0, 19);
+        link.href = downloadUrl;
+        link.download = `晴天生活-${location}-${stamp}.png`;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      }, "image/png");
+    };
+    window.addEventListener("sunny-life:photo", handlePhoto);
+
     const cameraDrift = new THREE.Vector3();
     const cameraPosition = new THREE.Vector3();
     const focusCamera = new THREE.Vector3();
@@ -876,7 +1047,11 @@ export default function World3D({
     const focusSide = new THREE.Vector3();
     const actionCameraOffset = new THREE.Vector3(3.45, 1.85, 4.35);
     const restCameraOffset = new THREE.Vector3(3.1, 2.2, 4.1);
+    const controlDirection = new THREE.Vector3();
+    const controlForward = new THREE.Vector3();
+    const controlRight = new THREE.Vector3();
     let frameId = 0;
+    let lastDiagnosticAt = Number.NEGATIVE_INFINITY;
     let stopped = false;
     let contextLost = false;
     let hasPresentedFrame = false;
@@ -931,36 +1106,104 @@ export default function World3D({
         });
       } else {
         if (runtime?.focus) runtime.focus = null;
-        const driftScale = indoor ? 0.38 : 1;
-        cameraDrift.set(
-          Math.sin(elapsed * 0.12) * 0.32 * driftScale,
-          Math.sin(elapsed * 0.18 + 0.8) * 0.12 * driftScale,
-          Math.cos(elapsed * 0.1) * 0.22 * driftScale,
-        );
-        director.camera?.moveTo(
-          cameraPosition.copy(viewCamera).add(cameraDrift),
-          viewTarget,
-          { positionDamping: 1.5, targetDamping: 4.2, fov: viewFov },
-        );
+        if (location === "home" && !cinematicView) {
+          director.camera?.follow(selected.group, {
+            offset: [6, 3.8, 7.4],
+            targetOffset: [0, 1.25, 0],
+            offsetSpace: "world",
+            positionDamping: 2.6,
+            targetDamping: 5.2,
+            fov: 34,
+          });
+        } else {
+          const driftScale = indoor ? 0.38 : 1;
+          cameraDrift.set(
+            Math.sin(elapsed * 0.12) * 0.32 * driftScale,
+            Math.sin(elapsed * 0.18 + 0.8) * 0.12 * driftScale,
+            Math.cos(elapsed * 0.1) * 0.22 * driftScale,
+          );
+          director.camera?.moveTo(
+            cameraPosition.copy(viewCamera).add(cameraDrift),
+            viewTarget,
+            { positionDamping: 1.5, targetDamping: 4.2, fov: viewFov },
+          );
+        }
+      }
+      if (runtime?.controlMode === "keyboard") {
+        const inputX = (pressedKeys.has("KeyD") || pressedKeys.has("ArrowRight") ? 1 : 0)
+          - (pressedKeys.has("KeyA") || pressedKeys.has("ArrowLeft") ? 1 : 0);
+        const inputForward = (pressedKeys.has("KeyW") || pressedKeys.has("ArrowUp") ? 1 : 0)
+          - (pressedKeys.has("KeyS") || pressedKeys.has("ArrowDown") ? 1 : 0);
+        controlForward.copy(director.camera?.target ?? viewTarget).sub(camera.position).setY(0);
+        if (controlForward.lengthSq() < 0.0001) controlForward.set(0, 0, -1);
+        else controlForward.normalize();
+        controlRight.set(-controlForward.z, 0, controlForward.x);
+        controlDirection
+          .copy(controlForward)
+          .multiplyScalar(inputForward)
+          .addScaledVector(controlRight, inputX);
+        if (controlDirection.lengthSq() > 1) controlDirection.normalize();
+        director.setControl(selected.group, {
+          direction: controlDirection,
+          run: pressedKeys.has("ShiftLeft") || pressedKeys.has("ShiftRight"),
+        });
       }
       director.update(delta, elapsed);
 
-      // The home screen is a persistent playable portrait rather than a short
-      // loading pose. After an explicit action, residents ease back to their
-      // authored marks and face the player; other locations remain autonomous.
-      if (stagedHomeOpening && !focusActive) {
-        characters.forEach((character, index) => {
-          const mark = composition.starts[index % composition.starts.length];
-          character.group.position.lerp(mark, 1 - Math.exp(-3.2 * delta));
-          character.group.lookAt(viewCamera.x, 0, viewCamera.z);
-        });
+      const selectedGrounding = groundCharacterToPlane(selected);
+      for (let index = 1; index < characters.length; index += 1) {
+        groundCharacterToPlane(characters[index]!);
+      }
+
+      if (elapsed - lastDiagnosticAt >= 0.12) {
+        lastDiagnosticAt = elapsed;
+        const selectedResident = director.residents[0];
+        if (selectedResident) {
+          selected.group.getWorldPosition(selectedPosition);
+          const collisionClearance = minimumCollisionClearance(
+            director.residents,
+            navigationObstacles,
+          );
+          element.dataset.selectedState = selectedResident.state;
+          element.dataset.selectedPosition = [selectedPosition.x, selectedPosition.y, selectedPosition.z]
+            .map((value) => value.toFixed(3))
+            .join(",");
+          element.dataset.selectedGrounded = String(selectedGrounding.grounded);
+          element.dataset.groundClearance = selectedGrounding.minimumGap.toFixed(4);
+          element.dataset.selectedFootGap = [selectedGrounding.leftGap, selectedGrounding.rightGap]
+            .map((value) => value.toFixed(4))
+            .join(",");
+          element.dataset.selectedGait = [
+            selected.joints.leftLeg.rotation.x,
+            selected.joints.rightLeg.rotation.x,
+            selected.joints.leftShin.rotation.x,
+            selected.joints.rightShin.rotation.x,
+            selected.joints.leftFoot.rotation.x,
+            selected.joints.rightFoot.rotation.x,
+          ].map((value) => THREE.MathUtils.radToDeg(value).toFixed(1)).join(",");
+          element.dataset.gaitSeparated = String(
+            selected.joints.leftLeg !== selected.joints.rightLeg
+            && selected.joints.leftShin !== selected.joints.rightShin
+            && selected.joints.leftFoot !== selected.joints.rightFoot,
+          );
+          element.dataset.gaitPhase = THREE.MathUtils.radToDeg(
+            selected.joints.leftLeg.rotation.x - selected.joints.rightLeg.rotation.x,
+          ).toFixed(1);
+          element.dataset.selectedSpeed = selectedResident.velocity.length().toFixed(3);
+          element.dataset.playerControl = runtime?.controlMode ?? "auto";
+          element.dataset.collisionClearance = Number.isFinite(collisionClearance)
+            ? collisionClearance.toFixed(4)
+            : "none";
+          element.dataset.collisionClear = String(
+            !Number.isFinite(collisionClearance) || collisionClearance >= -0.004,
+          );
+        }
       }
 
       const pulse = 1 + Math.sin(elapsed * 3.2) * 0.09;
       selectionRing.scale.setScalar(pulse);
-      const openingPortrait = stagedHomeOpening;
-      selectionRing.visible = !focusActive && !openingPortrait;
-      nameTag.visible = !focusActive && !openingPortrait;
+      selectionRing.visible = !focusActive;
+      nameTag.visible = !focusActive;
       nameTag.position.y = 3.68 + Math.sin(elapsed * 2.25) * 0.045;
       atmosphere.children.forEach((petal, index) => {
         const phase = Number(petal.userData.phase) || index;
@@ -1004,6 +1247,11 @@ export default function World3D({
       clock.stop();
       renderer.domElement.removeEventListener("webglcontextlost", handleContextLost);
       renderer.domElement.removeEventListener("webglcontextrestored", handleContextRestored);
+      renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("sunny-life:photo", handlePhoto);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
       if (runtimeRef.current?.director === director) runtimeRef.current = null;
       disposeWorld(world);
       renderer.dispose();
@@ -1022,6 +1270,8 @@ export default function World3D({
       return;
     }
 
+    runtime.controlMode = "auto";
+    director.setControl(selected, null);
     const duration = actionCue.kind === "talk" ? 30 : actionCue.kind === "rest" ? 6.4 : 5.2;
     runtime.focus = { kind: actionCue.kind, until: runtime.clock.elapsedTime + duration };
 
@@ -1056,72 +1306,16 @@ export default function World3D({
     : renderState === "lost"
       ? "实时画面暂时中断，正在恢复晴天市"
       : "正在进入晴天市";
-  const homePlate = sceneName(scene) === "home";
-  const portraitResidents = homePlate ? homePortraitResidents(residents, selectedId) : [];
-
   return (
     <div
       className="world3d"
       data-render-state={renderState}
-      data-scene-mode={homePlate ? "plate" : "3d"}
+      data-scene-mode="3d"
       data-time={timeOfDay}
       aria-label="晴天市实时三维生活场景"
       aria-busy={renderState !== "ready"}
     >
-      {homePlate ? (
-        <div
-          className="world3d-scene-plate"
-          data-time={timeOfDay}
-          data-weather={weatherMode}
-          role="img"
-          aria-label="晴天市高清街区背景"
-          style={{ backgroundImage: 'url("v4-home-background.webp")' }}
-        />
-      ) : null}
-      {homePlate ? (
-        <div className="world3d-wind-layer" aria-hidden="true">
-          {["left", "right"].map((patch, patchIndex) => (
-            <div className={`world3d-wind-patch world3d-wind-patch-${patch}`} key={patch}>
-              {Array.from({ length: 30 }, (_, blade) => (
-                <span
-                  key={blade}
-                  style={{
-                    left: `${(blade * 47 + (blade % 3) * 11 + patchIndex * 23) % 98}%`,
-                    bottom: `${(blade * 29 + 7 + patchIndex * 13) % 68}%`,
-                    height: `${7 + (blade % 6) * 1.7}px`,
-                    animationDelay: `-${((blade + patchIndex * 5) % 13) * 0.17}s`,
-                    animationDuration: `${1.65 + (blade % 7) * 0.17}s`,
-                  }}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      ) : null}
       <div className="world3d-stage" ref={host} aria-hidden={renderState !== "ready"} />
-      {homePlate ? (
-        <div className="world3d-avatar-layer" aria-label="晴天市居民">
-          {portraitResidents.map((resident, index) => {
-            const selected = String(resident.id) === String(selectedId);
-            return (
-              <div
-                className="world3d-avatar"
-                data-slot={index}
-                data-selected={selected ? "true" : "false"}
-                data-action={selected ? actionCue?.kind ?? "idle" : "idle"}
-                key={`${resident.id}:${selected ? actionCue?.token ?? 0 : 0}`}
-              >
-                <span
-                  className="world3d-avatar-portrait"
-                  role="img"
-                  aria-label={`${resident.name}的高清角色`}
-                  style={{ backgroundImage: `url("${homeAvatarAsset(resident, index)}")` }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
       <div className="world3d-poster" role="status" aria-live="polite">
         <div
           className="world3d-poster-image"

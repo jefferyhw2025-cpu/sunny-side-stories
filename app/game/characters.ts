@@ -140,6 +140,70 @@ function cachedGeometry<T extends THREE.BufferGeometry>(key: string, create: () 
   return result;
 }
 
+/**
+ * A revolved, softly tailored silhouette.  Using an authored profile instead
+ * of a cylinder/capsule keeps the body rounded while still giving it a real
+ * shoulder, waist and hem line.  That distinction is important at the small
+ * on-screen scale where a generic capsule reads as a carved peg.
+ */
+function createTailoredTorsoGeometry(): THREE.BufferGeometry {
+  return cachedGeometry("outfit-tailored-body-v6", () => {
+    const profile = [
+      new THREE.Vector2(0, -0.49),
+      new THREE.Vector2(0.31, -0.49),
+      new THREE.Vector2(0.39, -0.41),
+      new THREE.Vector2(0.415, -0.16),
+      new THREE.Vector2(0.405, 0.16),
+      new THREE.Vector2(0.355, 0.37),
+      new THREE.Vector2(0.25, 0.47),
+      new THREE.Vector2(0, 0.47),
+    ];
+    const geometry = new THREE.LatheGeometry(profile, 36);
+    geometry.computeVertexNormals();
+    return geometry;
+  });
+}
+
+function createRoundedShortsGeometry(): THREE.BufferGeometry {
+  return cachedGeometry("outfit-rounded-shorts-v6", () => {
+    const profile = [
+      new THREE.Vector2(0, -0.21),
+      new THREE.Vector2(0.33, -0.21),
+      new THREE.Vector2(0.405, -0.13),
+      new THREE.Vector2(0.415, 0.05),
+      new THREE.Vector2(0.36, 0.15),
+      new THREE.Vector2(0, 0.15),
+    ];
+    const geometry = new THREE.LatheGeometry(profile, 32);
+    geometry.computeVertexNormals();
+    return geometry;
+  });
+}
+
+/** A tapered, asymmetric lock reads as illustrated hair instead of a rod. */
+function createHairLockGeometry(kind: "front" | "side"): THREE.BufferGeometry {
+  return cachedGeometry(`hair-painted-lock-v6:${kind}`, () => {
+    const geometry = new THREE.SphereGeometry(0.5, 22, 16);
+    const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    for (let index = 0; index < position.count; index += 1) {
+      const rawX = position.getX(index);
+      const rawY = position.getY(index);
+      const rawZ = position.getZ(index);
+      const y01 = rawY + 0.5;
+      const tip = THREE.MathUtils.smoothstep(y01, 0, kind === "front" ? 0.42 : 0.28);
+      const width = THREE.MathUtils.lerp(0.18, 1, tip);
+      const x = rawX * (kind === "front" ? 0.24 : 0.27) * width;
+      const y = rawY * (kind === "front" ? 0.46 : 0.68);
+      const curvedFront = (1 - Math.abs(rawY) * 2) * (kind === "front" ? 0.045 : 0.025);
+      const z = rawZ * (kind === "front" ? 0.2 : 0.18) + curvedFront;
+      position.setXYZ(index, x, y, z);
+    }
+    position.needsUpdate = true;
+    geometry.computeVertexNormals();
+    return geometry;
+  });
+}
+
 function styleName(value: string | number): string {
   return String(value).trim().toLowerCase().replace(/[\s_]+/g, "-");
 }
@@ -186,6 +250,13 @@ function shiftedColor(value: string, lightness: number, fallback: string): THREE
   return safeColor(value, fallback).offsetHSL(0, 0, lightness);
 }
 
+function stableVariant(profile: CharacterProfile, count: number): number {
+  const value = `${profile.id}:${profile.name}:${profile.outfitStyle}`;
+  let hash = 17;
+  for (let index = 0; index < value.length; index += 1) hash = (hash * 33 + value.charCodeAt(index)) >>> 0;
+  return count > 0 ? hash % count : 0;
+}
+
 function material(
   color: THREE.ColorRepresentation,
   options: CharacterMaterialOptions = {},
@@ -204,6 +275,14 @@ function material(
 
   const base = {
     color: resolvedColor,
+    // A tiny self-lit contribution keeps the painted colours readable under
+    // evening street lights without making the resident look glossy or waxy.
+    emissive: resolvedColor,
+    emissiveIntensity:
+      surface === "skin" ? 0.045
+        : surface === "fabric" ? 0.026
+          : surface === "hair" ? 0.015
+            : 0.01,
     side: options.side ?? THREE.FrontSide,
     transparent: options.transparent ?? false,
     opacity: options.opacity ?? 1,
@@ -213,32 +292,24 @@ function material(
   let result: CharacterMaterial;
   switch (surface) {
     case "skin":
-      result = new THREE.MeshPhysicalMaterial({
+      // Standard diffuse shading keeps the face soft and readable. Physical
+      // sheen/clearcoat made the large cheeks catch broad plastic highlights,
+      // which was the biggest contributor to the clay-doll appearance.
+      result = new THREE.MeshStandardMaterial({
         ...base,
-        roughness: 0.82,
-        clearcoat: 0,
-        clearcoatRoughness: 1,
-        sheen: 0.025,
-        sheenColor: resolvedColor,
-        sheenRoughness: 1,
+        roughness: 0.94,
       });
       break;
     case "fabric":
-      result = new THREE.MeshPhysicalMaterial({
+      result = new THREE.MeshStandardMaterial({
         ...base,
-        roughness: 0.98,
-        clearcoat: 0,
-        sheen: 0.1,
-        sheenColor: resolvedColor.clone().offsetHSL(0, 0, 0.08),
-        sheenRoughness: 0.94,
+        roughness: 1,
       });
       break;
     case "leather":
-      result = new THREE.MeshPhysicalMaterial({
+      result = new THREE.MeshStandardMaterial({
         ...base,
-        roughness: 0.48,
-        clearcoat: 0.16,
-        clearcoatRoughness: 0.58,
+        roughness: 0.72,
       });
       break;
     case "eye":
@@ -250,7 +321,7 @@ function material(
       });
       break;
     case "hair":
-      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.64 });
+      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.88 });
       break;
     case "detail":
     default:
@@ -308,9 +379,11 @@ function createEye(
   skinMaterial: CharacterMaterial,
 ): THREE.Group {
   const resolved = resolveStyle(style, EYE_STYLES, "classic");
-  const eye = joint(parent, x, 0.285, 0.535 + FRONT);
+  // The eye artwork is flat, so place it on the cheek plane. The previous
+  // depth was inherited from the old spherical eyeball and left most of each
+  // oval buried inside the face, which read as permanently half-closed eyes.
+  const eye = joint(parent, x, 0.285, 0.593 + FRONT);
   const dark = material("#243044", { surface: "eye" });
-  const white = material("#fffdf7", { surface: "eye" });
   const iris = material("#755842", { surface: "eye" });
   const highlight = material("#ffffff", { surface: "eye" });
 
@@ -355,39 +428,42 @@ function createEye(
   } else {
     const wide = includesAny(resolved, ["wide", "round", "sparkle", "kind", "lashes"]);
     const almond = includesAny(resolved, ["almond", "cat", "focused", "downturned"]);
-    const eyeScaleX = almond ? 1.22 : wide ? 0.98 : 0.88;
-    const eyeScaleY = almond ? 0.68 : wide ? 1.08 : 0.92;
-    const scleraRadius = wide ? 0.112 : 0.103;
+    // Keep every open-eye option inside one coherent illustrated family.  A
+    // large white toy sclera made neighbouring residents look as though they
+    // came from different games; the target style uses a dark oval with two
+    // crisp catchlights and only a quiet hint of iris colour.
+    const eyeScaleX = almond ? 1.18 : wide ? 0.82 : 0.76;
+    const eyeScaleY = almond ? 0.76 : wide ? 1.18 : 1.06;
+    const eyeRadius = wide ? 0.092 : 0.087;
     addMesh(
       eye,
-      cachedGeometry(`eye-sclera:${wide ? "wide" : "classic"}`, () => new THREE.SphereGeometry(scleraRadius, 24, 16)),
-      white,
-      [0, 0, -0.002],
-      [eyeScaleX, eyeScaleY, 0.24],
+      circle(eyeRadius + 0.014, 26),
+      dark,
+      [0, 0, 0],
+      [eyeScaleX, eyeScaleY, 1],
       [0, 0, resolved === "downturned" ? (x < 0 ? -7 : 7) * DEG : resolved === "cat" ? (x < 0 ? 6 : -6) * DEG : 0],
     );
-    const irisRadius = wide ? 0.082 : 0.076;
-    addMesh(eye, circle(irisRadius + 0.012, 24), dark, [0, resolved === "kind" ? -0.012 : -0.004, 0.026]);
-    addMesh(eye, circle(irisRadius, 22), iris, [0, resolved === "kind" ? -0.012 : -0.004, 0.031]);
-    addMesh(eye, circle(0.042, 20), dark, [0, -0.006, 0.037]);
-    addMesh(eye, circle(resolved === "sparkle" ? 0.019 : 0.015, 14), highlight, [-0.019, 0.022, 0.045]);
-    addMesh(eye, circle(0.0065, 10), highlight, [0.022, -0.027, 0.046]);
+    const irisRadius = eyeRadius * 0.58;
+    addMesh(eye, circle(irisRadius, 22), iris, [0, resolved === "kind" ? -0.018 : -0.012, 0.012], [eyeScaleX * 0.92, eyeScaleY * 0.9, 1]);
+    addMesh(eye, circle(irisRadius * 0.64, 18), dark, [0, -0.013, 0.018], [eyeScaleX, eyeScaleY, 1]);
+    addMesh(eye, circle(resolved === "sparkle" ? 0.019 : 0.015, 14), highlight, [-0.018, 0.024, 0.024]);
+    addMesh(eye, circle(0.0065, 10), highlight, [0.018, -0.024, 0.026]);
     // A fine upper lid gives the eye an illustrated edge without using a
     // heavy whole-character outline.
     addMesh(
       eye,
-      cachedGeometry("eye-upper-lid", () => new THREE.TorusGeometry(0.105, 0.0105, 6, 24, Math.PI)),
+      cachedGeometry("eye-upper-lid-v6", () => new THREE.TorusGeometry(0.095, 0.009, 6, 24, Math.PI)),
       dark,
-      [0, 0.008, 0.043],
+      [0, 0.008, 0.028],
       [eyeScaleX, eyeScaleY * 0.82, 1],
       [0, 0, 0],
     );
     if (resolved === "sparkle") {
-      addMesh(eye, cachedGeometry("eye-star-glint", () => new THREE.OctahedronGeometry(0.012, 0)), highlight, [0.025, -0.018, 0.052], [0.72, 1.35, 0.38]);
+      addMesh(eye, cachedGeometry("eye-star-glint", () => new THREE.OctahedronGeometry(0.012, 0)), highlight, [0.025, -0.018, 0.032], [0.72, 1.35, 0.38]);
     }
     if (includesAny(resolved, ["lashes", "cat"])) addLashes(x < 0 ? -1 : 1, resolved === "lashes" ? 3 : 2);
     if (resolved === "focused") {
-      addMesh(eye, cachedGeometry("focused-lid", () => new THREE.BoxGeometry(0.19, 0.018, 0.018)), dark, [0, 0.07, 0.025], [1, 1, 1], [0, 0, x < 0 ? -7 * DEG : 7 * DEG]);
+      addMesh(eye, cachedGeometry("focused-lid-v6", () => new THREE.CapsuleGeometry(0.008, 0.16, 3, 8)), dark, [0, 0.07, 0.03], [1, 1, 0.4], [0, 0, (x < 0 ? 83 : 97) * DEG]);
     }
   }
 
@@ -516,9 +592,9 @@ function addHair(
   // Stop the cap above the eye line. Extending the spherical shell past the
   // forehead made several styles read as a dark helmet and hid the large eyes.
   const capGeometry = cachedGeometry("hair-cap-v4", () => new THREE.SphereGeometry(0.625, 30, 18, 0, Math.PI * 2, 0, Math.PI * 0.41));
-  const lockGeometry = cachedGeometry("hair-lock-v4", () => new THREE.CapsuleGeometry(0.11, 0.2, 6, 14));
+  const lockGeometry = createHairLockGeometry("front");
   const curlGeometry = cachedGeometry("hair-curl", () => new THREE.SphereGeometry(0.22, 18, 14));
-  const sideGeometry = cachedGeometry("hair-side-lock", () => new THREE.CapsuleGeometry(0.105, 0.34, 7, 16));
+  const sideGeometry = createHairLockGeometry("side");
   const cap = addMesh(
     head,
     capGeometry,
@@ -564,7 +640,7 @@ function addHair(
 
   const addSideburns = (length = 1): void => {
     for (const side of [-1, 1]) {
-      addMesh(head, sideGeometry, hairMaterial, [side * 0.55 * headScale[0], 0.25 - (length - 1) * 0.08, 0.2], [0.5, length, 0.58], [0, 0, side * -6 * DEG]);
+      addMesh(head, sideGeometry, side > 0 ? hairHighlight : hairMaterial, [side * 0.55 * headScale[0], 0.27 - (length - 1) * 0.1, 0.17], [0.58, length * 0.84, 0.72], [0, 0, side * -7 * DEG]);
     }
   };
 
@@ -611,6 +687,7 @@ function addHair(
     addSideburns(0.82);
     addMesh(head, cachedGeometry("hair-bun", () => new THREE.SphereGeometry(0.29, 24, 18)), hairMaterial, [0.2, 0.86, -0.11], [1, 0.9, 1]);
     addMesh(head, cachedGeometry("hair-bun-ring", () => new THREE.TorusGeometry(0.225, 0.042, 9, 24)), hairHighlight, [0.2, 0.85, -0.09], [1, 1, 1], [90 * DEG, 0, 0]);
+    addMesh(head, cachedGeometry("hair-bun-headband", () => new THREE.TorusGeometry(0.625, 0.028, 7, 34, Math.PI * 0.86)), hairHighlight, [0, 0.24, 0.06], [1, 1.04, 0.95], [0, 0, 0.07 * Math.PI]);
   } else if (includesAny(style, ["quiff", "spike", "messy"])) {
     addSideburns(0.72);
     const tufts: ReadonlyArray<readonly [number, number, number, number]> = [[-0.38, 0.7, -20, 0.33], [-0.14, 0.82, -9, 0.42], [0.12, 0.85, 7, 0.45], [0.39, 0.74, 20, 0.35]];
@@ -649,10 +726,10 @@ function addTraitDetail(
     }
     addMesh(head, new THREE.BoxGeometry(0.14, 0.02, 0.02), darkMaterial, [0, 0.29, 0.57]);
   } else if (includesAny(value, ["art", "creative", "music"])) {
-    const pin = addMesh(chest, new THREE.CircleGeometry(0.09, 6), shirtAccent, [0.24, 0.18, 0.465], [1, 1, 1]);
+    const pin = addMesh(chest, cachedGeometry("trait-creative-pin-v6", () => new THREE.CircleGeometry(0.075, 8)), shirtAccent, [0.22, 0.16, 0.355], [1, 1, 1]);
     pin.rotation.z = 30 * DEG;
   } else if (includesAny(value, ["adventure", "brave", "explore"])) {
-    addMesh(chest, new THREE.BoxGeometry(0.11, 0.72, 0.04), shirtAccent, [-0.05, 0, 0.46], [1, 1, 1], [0, 0, -21 * DEG]);
+    addMesh(chest, cachedGeometry("trait-adventure-strap-v6", () => new THREE.CapsuleGeometry(0.035, 0.61, 5, 12)), shirtAccent, [-0.05, 0, 0.345], [1, 1, 0.25], [0, 0, -21 * DEG]);
   }
 }
 
@@ -669,51 +746,63 @@ function addOutfit(
   const torsoStart = torso.children.length;
   const hipsStart = hips.children.length;
   const relaxed = includesAny(outfit, ["sweater", "hoodie"]);
-  addMesh(torso, cachedGeometry("outfit-torso", () => new THREE.CylinderGeometry(0.43, 0.53, 0.82, 24)), shirtMaterial, [0, 0, 0], [relaxed ? 1.05 : 1, 1, relaxed ? 0.87 : 0.82]);
-  addMesh(torso, cachedGeometry("outfit-hem", () => new THREE.CylinderGeometry(0.445, 0.54, 0.12, 24)), shirtShadow, [0, -0.36, 0], [relaxed ? 1.05 : 1, 1, 0.83]);
-  addMesh(torso, cachedGeometry("outfit-neckline", () => new THREE.TorusGeometry(0.17, 0.03, 10, 28)), shirtAccent, [0, 0.38, 0.19], [1, 0.48, 0.9], [90 * DEG, 0, 0]);
+  addMesh(
+    torso,
+    createTailoredTorsoGeometry(),
+    shirtMaterial,
+    [0, -0.005, 0],
+    [relaxed ? 1.08 : 1.02, 1, relaxed ? 0.84 : 0.8],
+  );
+  addMesh(torso, cachedGeometry("outfit-hem-tailored-v6", () => new THREE.TorusGeometry(0.325, 0.025, 8, 30)), shirtShadow, [0, -0.47, 0], [relaxed ? 1.08 : 1.02, 1, 0.82], [90 * DEG, 0, 0]);
+  addMesh(torso, cachedGeometry("outfit-neckline-v6", () => new THREE.TorusGeometry(0.16, 0.025, 10, 30)), shirtAccent, [0, 0.42, 0.11], [1, 0.54, 0.92], [90 * DEG, 0, 0]);
+
+  const isDress = includesAny(outfit, ["dress", "skirt"]);
+  if (!isDress) {
+    addMesh(hips, createRoundedShortsGeometry(), trouserMaterial, [0, -0.085, 0], [1.03, 1, 0.78]);
+    addMesh(hips, cachedGeometry("shorts-waistband-v6", () => new THREE.TorusGeometry(0.355, 0.025, 8, 30)), shirtAccent, [0, 0.055, 0], [1.02, 1, 0.78], [90 * DEG, 0, 0]);
+    addMesh(hips, cachedGeometry("shorts-seam-v6", () => new THREE.CapsuleGeometry(0.009, 0.17, 3, 8)), material(shiftedColor(profile.shirt, -0.2, "#314a62"), { surface: "fabric" }), [0, -0.09, 0.326], [1, 1, 0.45]);
+  }
 
   if (includesAny(outfit, ["overall", "dungaree"])) {
-    addMesh(torso, cachedGeometry("overall-bib", () => new THREE.BoxGeometry(0.46, 0.48, 0.07)), trouserMaterial, [0, -0.06, 0.405]);
+    addMesh(torso, cachedGeometry("overall-bib-v6", () => new THREE.CapsuleGeometry(0.16, 0.2, 7, 20)), trouserMaterial, [0, -0.055, 0.345], [1.12, 1, 0.16]);
     for (const side of [-1, 1]) {
-      addMesh(torso, cachedGeometry("overall-strap", () => new THREE.BoxGeometry(0.075, 0.5, 0.06)), trouserMaterial, [side * 0.21, 0.25, 0.38], [1, 1, 1], [0, 0, side * -8 * DEG]);
-      addMesh(torso, cachedGeometry("overall-button", () => new THREE.SphereGeometry(0.03, 12, 8)), shirtAccent, [side * 0.18, 0.17, 0.45], [1, 1, 0.5]);
+      addMesh(torso, cachedGeometry("overall-strap-v6", () => new THREE.CapsuleGeometry(0.032, 0.39, 5, 12)), trouserMaterial, [side * 0.2, 0.225, 0.34], [1, 1, 0.2], [0, 0, side * -8 * DEG]);
+      addMesh(torso, cachedGeometry("overall-button", () => new THREE.SphereGeometry(0.03, 12, 8)), shirtAccent, [side * 0.18, 0.17, 0.385], [1, 1, 0.5]);
     }
-    addMesh(torso, cachedGeometry("overall-pocket", () => new THREE.BoxGeometry(0.22, 0.16, 0.035)), shirtAccent, [0, -0.09, 0.455]);
+    addMesh(torso, cachedGeometry("overall-pocket-v6", () => new THREE.CapsuleGeometry(0.055, 0.11, 5, 14)), shirtAccent, [0, -0.105, 0.378], [1.28, 1, 0.18], [0, 0, 90 * DEG]);
   } else if (includesAny(outfit, ["jacket", "coat", "blazer"])) {
     for (const side of [-1, 1]) {
-      addMesh(torso, cachedGeometry("jacket-panel", () => new THREE.BoxGeometry(0.38, 0.7, 0.055)), shirtShadow, [side * 0.19, -0.02, 0.405], [1, 1, 1], [0, 0, side * 2 * DEG]);
-      addMesh(torso, cachedGeometry("jacket-lapel", () => new THREE.ConeGeometry(0.13, 0.38, 3)), shirtAccent, [side * 0.14, 0.17, 0.45], [1, 1, 0.4], [0, 0, side * 14 * DEG]);
+      addMesh(torso, cachedGeometry("jacket-panel-v6", () => new THREE.CapsuleGeometry(0.145, 0.42, 7, 20)), shirtShadow, [side * 0.18, -0.035, 0.335], [1.05, 1, 0.14], [0, 0, side * 2 * DEG]);
+      addMesh(torso, cachedGeometry("jacket-lapel-v6", () => new THREE.ConeGeometry(0.12, 0.36, 3)), shirtAccent, [side * 0.13, 0.17, 0.375], [1, 1, 0.18], [0, 0, side * 14 * DEG]);
     }
-    addMesh(torso, cachedGeometry("jacket-seam", () => new THREE.BoxGeometry(0.025, 0.62, 0.025)), shirtAccent, [0, -0.03, 0.45]);
+    addMesh(torso, cachedGeometry("jacket-seam-v6", () => new THREE.CapsuleGeometry(0.009, 0.58, 4, 10)), shirtAccent, [0, -0.035, 0.382], [1, 1, 0.4]);
     for (const y of [0.12, -0.08, -0.28]) {
-      addMesh(torso, cachedGeometry("jacket-button", () => new THREE.SphereGeometry(0.028, 12, 8)), shirtAccent, [0.045, y, 0.46], [1, 1, 0.5]);
+      addMesh(torso, cachedGeometry("jacket-button", () => new THREE.SphereGeometry(0.026, 14, 9)), shirtAccent, [0.045, y, 0.393], [1, 1, 0.42]);
     }
   } else if (includesAny(outfit, ["dress", "skirt"])) {
     addMesh(hips, cachedGeometry("dress-skirt", () => new THREE.CylinderGeometry(0.43, 0.68, 0.56, 28)), shirtMaterial, [0, -0.05, 0], [1, 1, 0.86]);
     addMesh(hips, cachedGeometry("dress-hem", () => new THREE.CylinderGeometry(0.69, 0.69, 0.07, 28)), shirtAccent, [0, -0.32, 0], [1, 1, 0.86]);
     addMesh(torso, cachedGeometry("dress-belt", () => new THREE.BoxGeometry(0.78, 0.08, 0.06)), shirtAccent, [0, -0.31, 0.36]);
   } else if (includesAny(outfit, ["sport", "athletic", "active"])) {
-    addMesh(torso, cachedGeometry("sport-stripe", () => new THREE.BoxGeometry(0.08, 0.72, 0.04)), shirtAccent, [0.28, -0.03, 0.42]);
-    addMesh(hips, cachedGeometry("sport-shorts", () => new THREE.BoxGeometry(0.77, 0.22, 0.46)), trouserMaterial, [0, -0.09, 0]);
-    addMesh(torso, cachedGeometry("sport-number", () => new THREE.CircleGeometry(0.14, 24)), shirtAccent, [0, 0.03, 0.445], [1, 1, 1]);
+    addMesh(torso, cachedGeometry("sport-stripe-v6", () => new THREE.CapsuleGeometry(0.026, 0.62, 5, 12)), shirtAccent, [0.27, -0.03, 0.355], [1, 1, 0.22]);
+    addMesh(torso, cachedGeometry("sport-number", () => new THREE.CircleGeometry(0.13, 28)), shirtAccent, [0, 0.03, 0.366], [1, 1, 1]);
   } else if (includesAny(outfit, ["sweater", "jumper", "knit"])) {
-    for (const y of [-0.24, -0.1, 0.04]) addMesh(torso, cachedGeometry("sweater-rib", () => new THREE.BoxGeometry(0.67, 0.025, 0.025)), shirtAccent, [0, y, 0.435]);
-    addMesh(torso, cachedGeometry("sweater-patch", () => new THREE.CircleGeometry(0.1, 24)), shirtShadow, [0.22, 0.18, 0.445], [1, 0.72, 1]);
+    for (const y of [-0.24, -0.1, 0.04]) addMesh(torso, cachedGeometry("sweater-rib-v6", () => new THREE.CapsuleGeometry(0.011, 0.59, 4, 10)), shirtAccent, [0, y, 0.36], [1, 1, 0.3], [0, 0, 90 * DEG]);
+    addMesh(torso, cachedGeometry("sweater-patch", () => new THREE.CircleGeometry(0.1, 28)), shirtShadow, [0.22, 0.18, 0.37], [1, 0.72, 1]);
   } else if (includesAny(outfit, ["sailor", "navy"])) {
     addMesh(torso, cachedGeometry("sailor-collar", () => new THREE.CircleGeometry(0.34, 3)), shirtAccent, [0, 0.21, 0.43], [1.35, 0.9, 1], [0, 0, Math.PI]);
     for (const side of [-1, 1]) addMesh(torso, cachedGeometry("sailor-bow", () => new THREE.ConeGeometry(0.105, 0.24, 3)), shirtShadow, [side * 0.105, 0.07, 0.47], [1, 1, 0.45], [0, 0, side * 90 * DEG]);
     addMesh(torso, cachedGeometry("sailor-knot", () => new THREE.SphereGeometry(0.055, 14, 10)), shirtAccent, [0, 0.07, 0.49], [1, 1, 0.55]);
   } else if (includesAny(outfit, ["hoodie", "hooded"])) {
     addMesh(torso, cachedGeometry("hoodie-hood", () => new THREE.TorusGeometry(0.31, 0.095, 12, 30, Math.PI * 1.55)), shirtShadow, [0, 0.39, -0.03], [1, 0.9, 0.75], [90 * DEG, 0, -0.28 * Math.PI]);
-    addMesh(torso, cachedGeometry("hoodie-pocket", () => new THREE.BoxGeometry(0.42, 0.19, 0.055)), shirtAccent, [0, -0.2, 0.445]);
+    addMesh(torso, cachedGeometry("hoodie-pocket-v6", () => new THREE.CapsuleGeometry(0.065, 0.27, 6, 16)), shirtAccent, [0, -0.2, 0.36], [1, 1, 0.18], [0, 0, 90 * DEG]);
     for (const side of [-1, 1]) {
       addMesh(torso, cachedGeometry("hoodie-string", () => new THREE.CylinderGeometry(0.008, 0.008, 0.28, 8)), shirtAccent, [side * 0.09, 0.22, 0.46]);
       addMesh(torso, cachedGeometry("hoodie-string-tip", () => new THREE.SphereGeometry(0.018, 10, 7)), shirtShadow, [side * 0.09, 0.07, 0.46]);
     }
   } else {
-    addMesh(torso, cachedGeometry("tee-stripe", () => new THREE.BoxGeometry(0.57, 0.055, 0.055)), shirtAccent, [0, 0.16, 0.42], [1, 1, 1], [0, 0, -3 * DEG]);
-    addMesh(torso, cachedGeometry("tee-pocket", () => new THREE.BoxGeometry(0.2, 0.15, 0.025)), shirtShadow, [0.19, -0.11, 0.445], [1, 1, 1], [0, 0, -2 * DEG]);
+    addMesh(torso, cachedGeometry("tee-stripe-v6", () => new THREE.CapsuleGeometry(0.021, 0.5, 5, 12)), shirtAccent, [0, 0.15, 0.36], [1, 1, 0.24], [0, 0, 87 * DEG]);
+    addMesh(torso, cachedGeometry("tee-pocket-v6", () => new THREE.CapsuleGeometry(0.045, 0.105, 5, 12)), shirtShadow, [0.18, -0.12, 0.365], [1.08, 1, 0.2], [0, 0, 90 * DEG]);
   }
 
   // Keep clothing graphic and compact: this scales only garment meshes, not the
@@ -752,7 +841,7 @@ function addArm(
     [0, -0.045, 0],
     [1.05, 0.88, 0.92],
   );
-  addMesh(arm, cachedGeometry("arm-upper-chibi", () => new THREE.CylinderGeometry(0.11, 0.095, 0.34, 18)), shirtMaterial, [0, -0.16, 0]);
+  addMesh(arm, cachedGeometry("arm-upper-rounded-v5", () => new THREE.CapsuleGeometry(0.098, 0.145, 7, 20)), shirtMaterial, [0, -0.16, 0]);
   addMesh(
     arm,
     cachedGeometry("sleeve-piping-v4", () => new THREE.TorusGeometry(0.103, 0.012, 6, 18)),
@@ -764,7 +853,7 @@ function addArm(
   addMesh(arm, cachedGeometry("sleeve-cuff-chibi", () => new THREE.CylinderGeometry(0.116, 0.116, 0.065, 18)), shirtAccent, [0, -0.31, 0]);
 
   const forearm = boneJoint(arm, `${sideName}-forearm`, 0, -0.34, 0);
-  addMesh(forearm, cachedGeometry("arm-forearm-chibi", () => new THREE.CylinderGeometry(0.09, 0.078, 0.33, 18)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.155, 0]);
+  addMesh(forearm, cachedGeometry("arm-forearm-rounded-v5", () => new THREE.CapsuleGeometry(0.082, 0.15, 7, 20)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.155, 0]);
   if (longSleeve) addMesh(forearm, cachedGeometry("wrist-cuff-chibi", () => new THREE.CylinderGeometry(0.093, 0.093, 0.065, 18)), shirtAccent, [0, -0.3, 0]);
   const hand = boneJoint(forearm, `${sideName}-hand`, 0, -0.34, 0);
   addMesh(hand, cachedGeometry("hand-palm-chibi", () => new THREE.SphereGeometry(0.112, 18, 13)), skinMaterial, [0, -0.045, 0.01], [0.94, 1.02, 0.78]);
@@ -792,7 +881,10 @@ function addLeg(
   const resolvedOutfit = resolveStyle(outfitStyle, OUTFIT_STYLES, "tee");
   const dress = includesAny(resolvedOutfit, ["dress", "skirt"]);
   const upperMaterial = dress ? skinMaterial : trouserMaterial;
-  addMesh(leg, cachedGeometry("leg-upper-chibi", () => new THREE.CylinderGeometry(0.135, 0.12, 0.42, 18)), upperMaterial, [0, -0.2, 0]);
+  addMesh(leg, cachedGeometry("leg-upper-rounded-v5", () => new THREE.CapsuleGeometry(0.122, 0.18, 7, 20)), upperMaterial, [0, -0.2, 0]);
+  if (!dress) {
+    addMesh(leg, cachedGeometry("shorts-cuff-v6", () => new THREE.TorusGeometry(0.122, 0.015, 6, 20)), trouserMaterial, [0, -0.34, 0], [1.04, 1, 0.96], [90 * DEG, 0, 0]);
+  }
 
   const shin = boneJoint(leg, `${sideName}-shin`, 0, -0.42, 0);
   addMesh(
@@ -802,14 +894,20 @@ function addLeg(
     [0, -0.012, 0.012],
     [1.02, 0.78, 0.9],
   );
-  addMesh(shin, cachedGeometry("leg-shin-chibi", () => new THREE.CylinderGeometry(0.115, 0.09, 0.39, 18)), skinMaterial, [0, -0.18, 0]);
-  addMesh(shin, cachedGeometry("shoe-collar-chibi", () => new THREE.CylinderGeometry(0.108, 0.108, 0.12, 18)), shoeMaterial, [0, -0.33, 0]);
+  addMesh(shin, cachedGeometry("leg-shin-rounded-v5", () => new THREE.CapsuleGeometry(0.101, 0.185, 7, 20)), skinMaterial, [0, -0.18, 0]);
+  const sockMaterial = material("#f7f1e6", { surface: "fabric" });
+  addMesh(shin, cachedGeometry("sock-cuff-v6", () => new THREE.CylinderGeometry(0.108, 0.104, 0.13, 20)), sockMaterial, [0, -0.315, 0]);
+  addMesh(shin, cachedGeometry("sock-rib-v6", () => new THREE.TorusGeometry(0.106, 0.012, 6, 20)), material("#e7dece", { surface: "fabric" }), [0, -0.255, 0], [1, 1, 0.96], [90 * DEG, 0, 0]);
+  addMesh(shin, cachedGeometry("shoe-collar-chibi-v6", () => new THREE.CylinderGeometry(0.111, 0.106, 0.105, 20)), shoeMaterial, [0, -0.365, 0]);
 
   const foot = boneJoint(shin, `${sideName}-foot`, 0, -0.4, 0.07);
   addMesh(foot, cachedGeometry("shoe-upper-chibi", () => new THREE.CapsuleGeometry(0.105, 0.15, 6, 16)), shoeMaterial, [0, -0.012, 0.085], [1.08, 1, 1], [90 * DEG, 0, 0]);
   addMesh(foot, cachedGeometry("shoe-toe-chibi", () => new THREE.SphereGeometry(0.116, 18, 12)), shoeMaterial, [0, -0.018, 0.235], [1.08, 0.74, 1.08]);
-  addMesh(foot, cachedGeometry("shoe-sole-chibi", () => new THREE.BoxGeometry(0.255, 0.042, 0.36)), material("#e9edf0"), [0, -0.1, 0.09]);
-  addMesh(foot, cachedGeometry("shoe-lace-chibi", () => new THREE.BoxGeometry(0.11, 0.016, 0.09)), material("#d7dde2"), [0, 0.064, 0.125]);
+  addMesh(foot, cachedGeometry("shoe-sole-rounded-v6", () => new THREE.CapsuleGeometry(0.105, 0.14, 6, 18)), material("#4b382c", { surface: "leather" }), [0, -0.09, 0.1], [1.15, 0.26, 1], [90 * DEG, 0, 0]);
+  const laceMaterial = material("#eadfca", { surface: "fabric" });
+  for (const z of [0.095, 0.155]) {
+    addMesh(foot, cachedGeometry("shoe-lace-rounded-v6", () => new THREE.CapsuleGeometry(0.007, 0.085, 3, 8)), laceMaterial, [0, 0.067, z], [1, 1, 0.45], [0, 0, 90 * DEG]);
+  }
   return { leg, shin, foot };
 }
 
@@ -825,8 +923,9 @@ function createHeadGeometry(faceStyle: string): THREE.BufferGeometry {
       // Start with a cheek-and-jaw silhouette rather than a scaled ball: the
       // upper cranium stays broad, cheeks are gently full, and the chin tapers.
       const cheek = Math.exp(-Math.pow((normalizedY + 0.12) / 0.42, 2)) * 0.045;
+      const minimumChin = faceStyle === "heart" ? 0.88 : faceStyle === "slim" ? 0.91 : faceStyle === "oval" ? 0.93 : 0.955;
       const chinTaper = normalizedY < -0.42
-        ? THREE.MathUtils.lerp(1, 0.865, THREE.MathUtils.smoothstep(-normalizedY, 0.42, 1))
+        ? THREE.MathUtils.lerp(1, minimumChin, THREE.MathUtils.smoothstep(-normalizedY, 0.42, 1))
         : 1;
       let width = (1 + cheek) * chinTaper;
       let depth = z >= 0 ? 0.965 : 0.91;
@@ -872,17 +971,22 @@ export function createCharacter(profile: CharacterProfile): Character {
   const chest = boneJoint(torso, "chest", 0, 0.06, 0);
   const neck = boneJoint(chest, "neck", 0, 0.4, 0);
   const head = boneJoint(neck, "head", 0, 0.3, 0);
-  head.scale.setScalar(1.06);
+  // A slightly smaller cranium puts the resident at roughly 2.6 heads tall:
+  // still unmistakably chibi, but no longer a head attached to a peg body.
+  head.scale.setScalar(0.98);
 
   const skinMaterial = material(profile.skin || "#d99a73", { surface: "skin" });
-  const skinShadow = material(shiftedColor(profile.skin, -0.1, "#b9795d"), { surface: "skin" });
+  const skinShadow = material(shiftedColor(profile.skin, -0.065, "#c78467"), { surface: "skin" });
   const hairMaterial = material(profile.hair || "#4a3028", { surface: "hair" });
-  const hairHighlight = material(shiftedColor(profile.hair, 0.08, "#67453a"), { surface: "hair" });
+  const hairHighlight = material(shiftedColor(profile.hair, 0.055, "#67453a"), { surface: "hair" });
   const shirtMaterial = material(profile.shirt || "#5ba8a0", { surface: "fabric" });
   const shirtShadow = material(shiftedColor(profile.shirt, -0.12, "#3d7e79"), { surface: "fabric" });
   const shirtAccent = material(shiftedColor(profile.shirt, 0.16, "#8dd0c8"), { surface: "fabric" });
-  const trouserMaterial = material("#405b72", { surface: "fabric" });
-  const shoeMaterial = material("#303946", { surface: "leather" });
+  const paletteVariant = stableVariant(profile, 5);
+  const bottomPalette = ["#4f6b7c", "#466779", "#7a5b43", "#4f6266", "#66556d"] as const;
+  const shoePalette = ["#6d4931", "#765038", "#5e4438", "#70432f", "#5c4637"] as const;
+  const trouserMaterial = material(bottomPalette[paletteVariant]!, { surface: "fabric" });
+  const shoeMaterial = material(shoePalette[paletteVariant]!, { surface: "leather" });
 
   const outfitStyle = addOutfit(torso, hips, profile, shirtMaterial, shirtShadow, shirtAccent, trouserMaterial);
   addMesh(neck, cachedGeometry("neck", () => new THREE.CylinderGeometry(0.16, 0.18, 0.25, 20)), skinMaterial, [0, -0.08, 0]);
@@ -1055,6 +1159,53 @@ function profileBlinkOffset(profile: CharacterProfile): number {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) hash = (hash * 31 + value.charCodeAt(index)) % 997;
   return hash / 997;
+}
+
+export type CharacterGrounding = {
+  readonly grounded: boolean;
+  readonly leftGap: number;
+  readonly rightGap: number;
+  readonly minimumGap: number;
+};
+
+const groundingLeftBox = new THREE.Box3();
+const groundingRightBox = new THREE.Box3();
+const groundingWorldPosition = new THREE.Vector3();
+const groundingWorldScale = new THREE.Vector3();
+
+/**
+ * Keep the lowest shoe sole on the character's world-space ground plane.
+ * The leg rig still supplies the stride; this only removes the visual hover
+ * (or pavement clipping) that a rotating procedural foot can otherwise cause.
+ */
+export function groundCharacterToPlane(
+  character: Character,
+  groundY?: number,
+): CharacterGrounding {
+  const { group, joints } = character;
+  group.updateWorldMatrix(true, true);
+  const planeY = typeof groundY === "number" && Number.isFinite(groundY)
+    ? groundY
+    : group.getWorldPosition(groundingWorldPosition).y;
+  groundingLeftBox.setFromObject(joints.leftFoot, true);
+  groundingRightBox.setFromObject(joints.rightFoot, true);
+  const lowestY = Math.min(groundingLeftBox.min.y, groundingRightBox.min.y);
+  const worldScaleY = Math.max(0.0001, Math.abs(group.getWorldScale(groundingWorldScale).y));
+  if (Number.isFinite(lowestY)) {
+    joints.root.position.y += (planeY - lowestY) / worldScaleY;
+    group.updateWorldMatrix(true, true);
+    groundingLeftBox.setFromObject(joints.leftFoot, true);
+    groundingRightBox.setFromObject(joints.rightFoot, true);
+  }
+  const leftGap = groundingLeftBox.min.y - planeY;
+  const rightGap = groundingRightBox.min.y - planeY;
+  const minimumGap = Math.min(leftGap, rightGap);
+  return {
+    grounded: Number.isFinite(minimumGap) && Math.abs(minimumGap) <= 0.006,
+    leftGap,
+    rightGap,
+    minimumGap,
+  };
 }
 
 /**

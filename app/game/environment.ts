@@ -36,6 +36,18 @@ type TreeCrown = {
   phase: number;
 };
 
+type GrassTuft = {
+  position: THREE.Vector3;
+  yaw: number;
+  scale: number;
+  phase: number;
+};
+
+type GrassDetails = {
+  mesh: THREE.InstancedMesh;
+  tufts: GrassTuft[];
+};
+
 const COLORS = {
   ink: 0x344b4f,
   grass: 0x79c866,
@@ -866,7 +878,7 @@ function timberBeam(
   const direction = end.clone().sub(start);
   const beam = addMesh(
     parent,
-    new THREE.BoxGeometry(thickness, direction.length(), depth),
+    roundedBoxGeometry(thickness, direction.length(), depth, Math.min(0.045, thickness * 0.24)),
     patternedMaterial(color, "wood", { roughness: 0.78 }),
   );
   beam.position.copy(start).add(end).multiplyScalar(0.5);
@@ -988,6 +1000,60 @@ function createTiledGableRoof(
   box(parent, [0.2, 0.22, depth + 0.34], 0x7b5038, [-width / 2, baseY, 0]);
   box(parent, [0.2, 0.22, depth + 0.34], 0x7b5038, [width / 2, baseY, 0]);
   return roof;
+}
+
+/**
+ * A shallow tiled canopy gives the lower floor a second, human-scale roofline.
+ * The target village relies on this repeated terracotta silhouette much more
+ * than on large flat coloured slabs, so the detail is instanced and cheap.
+ */
+function createTerracottaCanopy(
+  parent: THREE.Object3D,
+  width: number,
+  y: number,
+  z: number,
+  roofColor: THREE.ColorRepresentation,
+): void {
+  const clayColor = new THREE.Color(roofColor)
+    .lerp(new THREE.Color(0xe6784d), 0.72)
+    .getHex();
+  const canopy = roundedBox(
+    parent,
+    [width, 0.16, 1.02],
+    clayColor,
+    [0, y, z],
+    [-0.16, 0, 0],
+    0.055,
+    "roof",
+  );
+  canopy.castShadow = true;
+
+  const tileCount = Math.max(10, Math.ceil(width / 0.28));
+  const eaveTiles = new THREE.InstancedMesh(
+    prepareInstancedGeometry(
+      new THREE.CylinderGeometry(0.09, 0.105, width / tileCount + 0.035, 9),
+    ),
+    toon(new THREE.Color(clayColor).lerp(new THREE.Color(0xf29a68), 0.24).getHex(), {
+      roughness: 0.8,
+    }),
+    tileCount,
+  );
+  eaveTiles.name = "Rounded residential canopy tiles";
+  eaveTiles.castShadow = false;
+  const matrix = new THREE.Matrix4();
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+  const scale = new THREE.Vector3(1, 1, 1);
+  for (let index = 0; index < tileCount; index += 1) {
+    const x = -width / 2 + ((index + 0.5) / tileCount) * width;
+    matrix.compose(new THREE.Vector3(x, y - 0.08, z + 0.52), rotation, scale);
+    eaveTiles.setMatrixAt(index, matrix);
+  }
+  eaveTiles.instanceMatrix.needsUpdate = true;
+  parent.add(eaveTiles);
+
+  for (const x of [-width / 2 + 0.28, width / 2 - 0.28]) {
+    timberBeam(parent, [x, y - 0.12, z - 0.32], [x, y - 0.58, z + 0.28], 0.09, 0.1);
+  }
 }
 
 function createWindowPlanter(
@@ -1497,7 +1563,7 @@ function createTree(
   // and small-scale detail for one draw call instead of dozens of meshes.
   const leafCount = 112;
   const leafPuffs = new THREE.InstancedMesh(
-    prepareInstancedGeometry(new THREE.DodecahedronGeometry(0.105, 0)),
+    prepareInstancedGeometry(new THREE.SphereGeometry(0.105, 8, 6)),
     toon(0xffffff, {
       roughness: 0.82,
     }),
@@ -1570,7 +1636,7 @@ function createBush(
 
   const detailCount = 18;
   const detail = new THREE.InstancedMesh(
-    prepareInstancedGeometry(new THREE.DodecahedronGeometry(0.13, 0)),
+    prepareInstancedGeometry(new THREE.SphereGeometry(0.13, 8, 6)),
     toon(0xffffff, { roughness: 0.86 }),
     detailCount,
   );
@@ -2165,19 +2231,23 @@ function createTownSign(parent: THREE.Object3D, x: number, z: number): void {
   }
 }
 
-function createGrassDetails(parent: THREE.Object3D): void {
+function createGrassDetails(parent: THREE.Object3D): GrassDetails {
   const maximum = 190;
   const geometry = new THREE.ConeGeometry(0.052, 0.25, 3);
+  // Keep the base of every tuft on the local origin. Rotating an instance can
+  // then bend the blade without lifting its foot away from the terrain.
   geometry.translate(0, 0.125, 0);
   const grass = new THREE.InstancedMesh(geometry, toon(COLORS.grassDark, { roughness: 1 }), maximum);
   grass.name = "Fine grass tufts";
   grass.castShadow = false;
   grass.receiveShadow = false;
+  grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   const matrix = new THREE.Matrix4();
   const position = new THREE.Vector3();
   const rotation = new THREE.Quaternion();
   const scale = new THREE.Vector3();
   const euler = new THREE.Euler();
+  const tufts: GrassTuft[] = [];
   let placed = 0;
 
   for (let candidate = 0; candidate < 520 && placed < maximum; candidate += 1) {
@@ -2192,18 +2262,22 @@ function createGrassDetails(parent: THREE.Object3D): void {
     const nearPond = Math.hypot((x + 8.5) / 1.45, z - 10.2) < 3.1;
     if (onVerticalRoad || onHorizontalRoad || nearPlaza || nearPond) continue;
 
-    position.set(x, 0.005, z);
-    euler.set(0, angle * 1.7, Math.sin(candidate * 1.31) * 0.08);
-    rotation.setFromEuler(euler);
+    const yaw = angle * 1.7;
+    const phase = (candidate * 1.61803398875 + normalizedRadius * Math.PI * 2) % (Math.PI * 2);
     const variation = 0.72 + ((candidate * 29) % 37) / 92;
+    position.set(x, 0.005, z);
+    euler.set(0, yaw, 0, "YXZ");
+    rotation.setFromEuler(euler);
     scale.set(variation, variation, variation);
     matrix.compose(position, rotation, scale);
     grass.setMatrixAt(placed, matrix);
+    tufts.push({ position: position.clone(), yaw, scale: variation, phase });
     placed += 1;
   }
   grass.count = placed;
   grass.instanceMatrix.needsUpdate = true;
   parent.add(grass);
+  return { mesh: grass, tufts };
 }
 
 function createDistantScenery(parent: THREE.Object3D): THREE.Group[] {
@@ -2788,6 +2862,563 @@ function createHomeInterior(): TownEnvironment {
   };
 }
 
+type CompactFacilityKind = "cafe" | "market" | "community";
+
+/**
+ * A compact resident home used by the opening town.  Its clean painted walls,
+ * broad tiled roof and oversized readable windows deliberately avoid the tall
+ * timber-frame silhouette used in the older exploration scenes.
+ */
+function createCompactResidentHome(
+  parent: THREE.Object3D,
+  x: number,
+  z: number,
+  bodyColor: THREE.ColorRepresentation,
+  roofColor: THREE.ColorRepresentation,
+  doorColor: THREE.ColorRepresentation,
+  yaw = 0,
+  variant = 0,
+): THREE.Group {
+  const house = new THREE.Group();
+  house.name = `Colourful resident home ${variant + 1}`;
+  house.position.set(x, 0, z);
+  house.rotation.y = yaw;
+  parent.add(house);
+
+  const foundation = roundedBox(
+    house,
+    [4.5, 0.38, 3.55],
+    0xd1cbbb,
+    [0, 0.19, 0],
+    [0, 0, 0],
+    0.1,
+    "paving",
+  );
+  foundation.receiveShadow = true;
+  const plasterColor = new THREE.Color(bodyColor)
+    .lerp(new THREE.Color(0xfff1d8), 0.76)
+    .getHex();
+  const clayRoofColor = new THREE.Color(roofColor)
+    .lerp(new THREE.Color(0xdf704d), 0.82)
+    .getHex();
+  const body = roundedBox(
+    house,
+    [4.16, 4.32, 3.22],
+    plasterColor,
+    [0, 2.48, 0],
+    [0, 0, 0],
+    0.18,
+    "stucco",
+  );
+  body.castShadow = true;
+  body.receiveShadow = true;
+
+  const trimColor = new THREE.Color(plasterColor).lerp(new THREE.Color(0xfff8e9), 0.68).getHex();
+  const timberColor = new THREE.Color(0x855638)
+    .lerp(new THREE.Color(doorColor), 0.08)
+    .getHex();
+  const frontZ = 1.67;
+  addStoneFoundationFace(house, 4.12, frontZ + 0.025, 0.31);
+  box(house, [4.08, 0.19, 0.17], timberColor, [0, 0.62, frontZ]);
+  box(house, [4.08, 0.15, 0.17], timberColor, [0, 4.47, frontZ]);
+  box(house, [4.08, 0.15, 0.17], timberColor, [0, 2.94, frontZ]);
+  for (const side of [-1, 1]) {
+    box(house, [0.17, 4.02, 0.17], timberColor, [side * 1.98, 2.48, frontZ]);
+  }
+
+  createTiledGableRoof(house, 4.85, 3.78, 1.72, 4.57, clayRoofColor, plasterColor);
+  createTerracottaCanopy(house, 4.26, 2.98, frontZ + 0.42, clayRoofColor);
+
+  const doorX = variant % 2 === 0 ? -0.8 : 0.8;
+  roundedBox(house, [0.96, 2.12, 0.17], trimColor, [doorX, 1.49, frontZ + 0.04], [0, 0, 0], 0.12);
+  roundedBox(house, [0.78, 1.94, 0.12], doorColor, [doorX, 1.49, frontZ + 0.16], [0, 0, 0], 0.1);
+  sphere(house, 0.055, COLORS.gold, [doorX + (doorX < 0 ? 0.25 : -0.25), 1.47, frontZ + 0.27], [1, 1, 0.55]);
+  roundedBox(house, [1.2, 0.16, 0.7], 0xcfc6b3, [doorX, 0.13, frontZ + 0.28], [0, 0, 0], 0.06, "paving");
+
+  const lowerWindowX = -doorX * 0.88;
+  addWindow(house, lowerWindowX, 1.75, frontZ + 0.02, 1.22, 1.28);
+  createWindowPlanter(house, lowerWindowX, 0.86, frontZ + 0.29, 1.42);
+  addArchedWindow(house, 0, 3.72, frontZ + 0.02, 1.02, 1.22, true);
+
+  const sideWindow = new THREE.Group();
+  sideWindow.position.x = variant % 2 === 0 ? 2.12 : -2.12;
+  sideWindow.rotation.y = variant % 2 === 0 ? Math.PI / 2 : -Math.PI / 2;
+  house.add(sideWindow);
+  addWindow(sideWindow, 0, 2.25, 0, 0.9, 1.02);
+
+  if (variant % 3 === 0) {
+    box(house, [0.42, 1.08, 0.42], 0xe8dfce, [1.22, 5.3, -0.5]);
+    box(house, [0.58, 0.14, 0.58], clayRoofColor, [1.22, 5.9, -0.5]);
+  }
+
+  house.userData.kind = "house";
+  house.userData.height = 6.4;
+  return house;
+}
+
+function createCompactFacility(
+  parent: THREE.Object3D,
+  x: number,
+  z: number,
+  kind: CompactFacilityKind,
+  yaw = 0,
+): THREE.Group {
+  const facility = new THREE.Group();
+  facility.name = `Neighbourhood ${kind}`;
+  facility.position.set(x, 0, z);
+  facility.rotation.y = yaw;
+  parent.add(facility);
+
+  const palette: Record<CompactFacilityKind, readonly [number, number, number, number]> = {
+    cafe: [0xffe8cb, 0xdd6b49, 0x4f9b8c, 0xfff6e3],
+    market: [0xf7ead1, 0xe07a4d, 0xd99445, 0xfff7e5],
+    community: [0xeee5d2, 0xcf6549, 0x5a8eb4, 0xfff8ea],
+  };
+  const [wallColor, roofColor, accentColor, trimColor] = palette[kind];
+  const frontZ = 1.84;
+  const timberColor = kind === "community" ? 0x775540 : 0x815239;
+  const foundation = roundedBox(facility, [5.45, 0.4, 3.9], 0xcec8b8, [0, 0.2, 0], [0, 0, 0], 0.11, "paving");
+  foundation.receiveShadow = true;
+  addStoneFoundationFace(facility, 5.12, frontZ + 0.03, 0.31);
+  const body = roundedBox(facility, [5.14, 3.92, 3.58], wallColor, [0, 2.34, 0], [0, 0, 0], 0.2, "stucco");
+  body.castShadow = true;
+  for (const side of [-1, 1]) {
+    box(facility, [0.18, 3.72, 0.18], timberColor, [side * 2.45, 2.37, frontZ]);
+  }
+  box(facility, [5.02, 0.18, 0.18], timberColor, [0, 0.66, frontZ]);
+  box(facility, [5.02, 0.16, 0.18], timberColor, [0, 4.25, frontZ]);
+  createTiledGableRoof(facility, 5.82, 4.18, 1.86, 4.3, roofColor, wallColor);
+  roundedBox(facility, [4.86, 0.74, 0.24], accentColor, [0, 3.63, frontZ], [0, 0, 0], 0.12);
+  createFabricAwning(facility, -0.72, 3.08, frontZ + 0.05, 3.1, accentColor);
+  addStorefrontWindow(facility, -0.72, 1.8, frontZ + 0.02, 2.82, 1.74, 3);
+  roundedBox(facility, [1.04, 2.28, 0.18], trimColor, [1.72, 1.52, frontZ + 0.04], [0, 0, 0], 0.12);
+  roundedBox(facility, [0.82, 2.08, 0.13], accentColor, [1.72, 1.52, frontZ + 0.17], [0, 0, 0], 0.1);
+  sphere(facility, 0.055, COLORS.gold, [1.46, 1.5, frontZ + 0.28], [1, 1, 0.55]);
+  roundedBox(facility, [1.34, 0.14, 0.74], 0xcfc6b4, [1.72, 0.12, frontZ + 0.3], [0, 0, 0], 0.06, "paving");
+
+  // A large physical icon makes each facility legible from the roaming camera.
+  const badge = cylinder(facility, 0.65, 0.65, 0.16, 20, trimColor, [0, 3.68, frontZ + 0.16]);
+  badge.rotation.x = Math.PI / 2;
+  if (kind === "cafe") {
+    const cup = roundedBox(facility, [0.48, 0.36, 0.12], accentColor, [0, 3.65, frontZ + 0.28], [0, 0, 0], 0.08);
+    cup.castShadow = false;
+    const handle = addMesh(
+      facility,
+      new THREE.TorusGeometry(0.15, 0.045, 7, 14, Math.PI * 1.55),
+      toon(accentColor),
+      [0.27, 3.68, frontZ + 0.31],
+      [0, 0, -Math.PI / 2],
+    );
+    handle.castShadow = false;
+  } else if (kind === "market") {
+    roundedBox(facility, [0.58, 0.42, 0.12], accentColor, [0, 3.62, frontZ + 0.29], [0, 0, 0], 0.08);
+    const handle = addMesh(
+      facility,
+      new THREE.TorusGeometry(0.22, 0.04, 6, 14, Math.PI),
+      toon(accentColor),
+      [0, 3.86, frontZ + 0.31],
+    );
+    handle.castShadow = false;
+  } else {
+    for (const offset of [-0.23, 0, 0.23]) {
+      box(facility, [0.12, 0.56 - Math.abs(offset), 0.11], accentColor, [offset, 3.64, frontZ + 0.29]);
+    }
+    box(facility, [0.72, 0.1, 0.11], accentColor, [0, 3.38, frontZ + 0.29]);
+  }
+
+  const planterColors = kind === "market" ? [0xf28b4b, 0xf4cf52, 0x68b764] : [0xf37f8f, 0xffc955, 0x8a7bd2];
+  for (let index = 0; index < 3; index += 1) {
+    roundedBox(facility, [0.82, 0.38, 0.58], 0xa96b45, [-1.55 + index * 1.02, 0.27, 2.18], [0, 0, 0], 0.06, "wood");
+    for (let item = 0; item < 3; item += 1) {
+      sphere(facility, 0.12, planterColors[index], [-1.79 + index * 1.02 + item * 0.23, 0.55, 2.2]);
+    }
+  }
+
+  facility.userData.kind = kind === "cafe" ? "cafe" : kind === "market" ? "shop" : "house";
+  facility.userData.height = 6.2;
+  return facility;
+}
+
+function createHomeRoadNetwork(parent: THREE.Object3D): void {
+  // The opening scene is a pedestrian village, so use warm irregular stone
+  // throughout instead of an asphalt crossroad.  This also unifies the road,
+  // doorsteps and building foundations under the same material language.
+  const laneMaterial = patternedMaterial(0xe1d4bf, "paving", {
+    roughness: 0.99,
+    normalScale: new THREE.Vector2(0.48, 0.48),
+  });
+  const vertical = addMesh(parent, new THREE.BoxGeometry(5.15, 0.035, 47), laneMaterial, [1, -0.008, 0]);
+  const horizontal = addMesh(parent, new THREE.BoxGeometry(47, 0.035, 5.15), laneMaterial, [0, -0.008, 2]);
+  vertical.receiveShadow = true;
+  horizontal.receiveShadow = true;
+
+  const sidewalkMaterial = patternedMaterial(0xf0e7d7, "paving", { roughness: 1 });
+  for (const x of [-2.08, 4.08]) {
+    const sidewalk = addMesh(parent, new THREE.BoxGeometry(0.98, 0.04, 47), sidewalkMaterial, [x, -0.01, 0]);
+    sidewalk.receiveShadow = true;
+    box(parent, [0.11, 0.08, 47], 0xc3b8a5, [x + (x < 0 ? 0.5 : -0.5), -0.03, 0]);
+  }
+  for (const z of [-1.08, 5.08]) {
+    const sidewalk = addMesh(parent, new THREE.BoxGeometry(47, 0.04, 0.98), sidewalkMaterial, [0, -0.01, z]);
+    sidewalk.receiveShadow = true;
+    box(parent, [47, 0.08, 0.11], 0xc3b8a5, [0, -0.03, z + (z < 0 ? 0.5 : -0.5)]);
+  }
+
+  const crossingInset = addMesh(
+    parent,
+    new THREE.CircleGeometry(3.45, 40),
+    patternedMaterial(0xeee3d1, "paving", { roughness: 1, side: THREE.DoubleSide }),
+    [1, 0.012, 2],
+    [-Math.PI / 2, 0, 0],
+  );
+  crossingInset.receiveShadow = true;
+  const crossingRing = addMesh(
+    parent,
+    new THREE.RingGeometry(3.2, 3.43, 40),
+    toon(0xc8baa4, { roughness: 1, side: THREE.DoubleSide }),
+    [1, 0.014, 2],
+    [-Math.PI / 2, 0, 0],
+  );
+  crossingRing.receiveShadow = true;
+
+  // A single instanced layer of lightly irregular setts gives close shots
+  // readable joints while retaining one draw call for the whole intersection.
+  const settRows = 15;
+  const settColumns = 9;
+  const setts = new THREE.InstancedMesh(
+    prepareInstancedGeometry(new THREE.BoxGeometry(0.5, 0.012, 0.38)),
+    toon(0xffffff, { map: surfaceTexture("paving"), roughness: 1 }),
+    settRows * settColumns,
+  );
+  setts.name = "Warm village intersection setts";
+  setts.castShadow = false;
+  setts.receiveShadow = true;
+  const settMatrix = new THREE.Matrix4();
+  const settRotation = new THREE.Quaternion();
+  const settScale = new THREE.Vector3();
+  const settPalette = [0xdacdb8, 0xe7dbc6, 0xcdbfa9, 0xeee1cc];
+  let settIndex = 0;
+  for (let row = 0; row < settRows; row += 1) {
+    for (let column = 0; column < settColumns; column += 1) {
+      const sx = 1 + (column - (settColumns - 1) / 2) * 0.55 + (row % 2) * 0.25;
+      const sz = 2 + (row - (settRows - 1) / 2) * 0.44;
+      if (Math.hypot(sx - 1, sz - 2) > 3.05) continue;
+      settRotation.setFromEuler(new THREE.Euler(0, ((row * 7 + column * 3) % 5 - 2) * 0.018, 0));
+      const variation = 0.91 + ((row * 11 + column * 5) % 7) * 0.018;
+      settScale.set(variation, 1, 0.92 + ((row + column) % 4) * 0.025);
+      settMatrix.compose(new THREE.Vector3(sx, 0.02, sz), settRotation, settScale);
+      setts.setMatrixAt(settIndex, settMatrix);
+      setts.setColorAt(settIndex, new THREE.Color(settPalette[(row + column) % settPalette.length]));
+      settIndex += 1;
+    }
+  }
+  setts.count = settIndex;
+  setts.instanceMatrix.needsUpdate = true;
+  if (setts.instanceColor) setts.instanceColor.needsUpdate = true;
+  parent.add(setts);
+
+  const promenade = roundedBox(
+    parent,
+    [11.8, 0.035, 4.25],
+    0xeee3d1,
+    [-6.25, -0.008, 8.45],
+    [0, 0, 0],
+    0.34,
+    "paving",
+  );
+  promenade.receiveShadow = true;
+  roundedBox(parent, [4.9, 0.035, 1.55], 0xeee3d1, [-0.2, -0.008, 8.45], [0, 0, 0], 0.2, "paving");
+
+  const lotPads: ReadonlyArray<readonly [number, number, number, number]> = [
+    [-9.8, 3.1, 5.4, 4.55],
+    [-15.2, 2.6, 5.2, 4.45],
+    [-15.2, -8.9, 5.2, 4.45],
+    [-3.1, -12.6, 5.2, 4.45],
+    [8.6, -10.5, 5.2, 4.45],
+    [14.7, -8.5, 5.2, 4.45],
+    [14.5, 9.8, 5.7, 4.8],
+    [7.9, -2.2, 6.1, 4.8],
+    [8.4, 7.65, 5.9, 4.8],
+  ];
+  for (let index = 0; index < lotPads.length; index += 1) {
+    const [x, z, width, depth] = lotPads[index];
+    const pad = roundedBox(
+      parent,
+      [width, 0.025, depth],
+      index % 2 === 0 ? 0x9bd377 : 0x8fcd72,
+      [x, -0.003, z],
+      [0, 0, 0],
+      0.32,
+      "grass",
+    );
+    pad.receiveShadow = true;
+  }
+
+  const doorstepPaths: ReadonlyArray<readonly [number, number, number, number, number]> = [
+    [-9.8, 5.55, 3.2, 1.1, 0],
+    [-15.2, 5.15, 2.25, 1.05, 0],
+    [-15.2, -6.45, 2.4, 1.05, 0],
+    [-3.1, -10.05, 2.45, 1.05, 0],
+    [8.6, -7.98, 2.5, 1.05, 0],
+    [14.7, -5.95, 2.45, 1.05, 0],
+    [14.5, 7.15, 2.35, 1.05, 0],
+    [7.9, 0.42, 2.5, 1.25, 0],
+    [8.4, 5.15, 2.25, 1.25, 0],
+  ];
+  for (const [x, z, length, width, yaw] of doorstepPaths) {
+    const path = roundedBox(parent, [width, 0.026, length], 0xeee5d5, [x, -0.003, z], [0, yaw, 0], 0.11, "paving");
+    path.receiveShadow = true;
+  }
+}
+
+function createHomePlaza(parent: THREE.Object3D, droplets: JetDrop[]): void {
+  const base = cylinder(parent, 4.75, 4.75, 0.045, 40, 0xe3d8c5, [-7.7, -0.012, -5.2]);
+  base.material = patternedMaterial(0xe3d8c5, "paving", { roughness: 1 });
+  const inset = cylinder(parent, 4.08, 4.08, 0.014, 40, 0xf3e9d7, [-7.7, 0.008, -5.2], false);
+  inset.material = patternedMaterial(0xf3e9d7, "paving", { roughness: 1 });
+  const ring = addMesh(
+    parent,
+    new THREE.TorusGeometry(3.25, 0.055, 6, 40),
+    toon(0xc6bba9, { roughness: 1 }),
+    [-7.7, 0.018, -5.2],
+    [Math.PI / 2, 0, 0],
+  );
+  ring.castShadow = false;
+  const fountain = createFountain(parent, -7.7, -5.2, droplets);
+  fountain.scale.setScalar(0.75);
+}
+
+function createHomeBackdrop(parent: THREE.Object3D): THREE.Group[] {
+  const backdrop = new THREE.Group();
+  backdrop.name = "Colourful neighbourhood backdrop";
+  parent.add(backdrop);
+  const clouds: THREE.Group[] = [];
+
+  const hillData: ReadonlyArray<readonly [number, number, number, number]> = [
+    [-16, -23, 8.8, 0x8bb784],
+    [-3, -25, 10.5, 0x7fab7c],
+    [12, -24, 9.2, 0x8fbc88],
+    [24, -16, 7.5, 0x84af80],
+    [-25, 12, 8.4, 0x94c08a],
+  ];
+  for (const [x, z, scale, color] of hillData) {
+    const hill = sphere(backdrop, 2.4, color, [x, -0.15, z], [scale / 4.6, 0.72, scale / 5]);
+    hill.castShadow = false;
+    hill.receiveShadow = true;
+  }
+
+  const skyline: ReadonlyArray<readonly [number, number, number, number, number]> = [
+    [-16, -18.4, 0xffe8d1, 0xd96d4e, 0.68],
+    [-10.6, -20.1, 0xf1e6d5, 0xcc6749, 0.58],
+    [-4.8, -20.7, 0xffedca, 0xdf754d, 0.62],
+    [2.2, -21.2, 0xeee8d8, 0xd16b48, 0.6],
+    [9.5, -20.1, 0xf8e3d5, 0xe07a53, 0.64],
+    [17.5, -17.6, 0xe7e5da, 0xcf684b, 0.58],
+  ];
+  skyline.forEach(([x, z, wall, roof, scale], index) => {
+    const building = new THREE.Group();
+    building.position.set(x, 0, z);
+    building.scale.setScalar(scale);
+    backdrop.add(building);
+    roundedBox(building, [4.2, 3.7, 3], wall, [0, 1.94, 0], [0, 0, 0], 0.18, "stucco");
+    const roofMesh = addMesh(
+      building,
+      gableRoofGeometry(4.7, 3.45, 1.55),
+      patternedMaterial(roof, "roof", { roughness: 0.8, side: THREE.DoubleSide }),
+      [0, 3.82, 0],
+    );
+    roofMesh.castShadow = false;
+    addWindow(building, index % 2 === 0 ? -0.8 : 0.8, 2.05, 1.56, 0.88, 0.94);
+  });
+
+  const cloudData: ReadonlyArray<readonly [number, number, number, number]> = [
+    [-15, 10.2, -16, 1.12],
+    [7, 11.8, -22, 1.36],
+    [21, 9.4, -9, 0.92],
+    [-23, 8.7, 5, 1.02],
+  ];
+  for (const [x, y, z, scale] of cloudData) {
+    const cloud = new THREE.Group();
+    cloud.position.set(x, y, z);
+    cloud.scale.setScalar(scale);
+    backdrop.add(cloud);
+    sphere(cloud, 1, 0xfff8e8, [0, 0, 0], [1.6, 0.68, 0.82]).castShadow = false;
+    sphere(cloud, 0.78, 0xffffff, [-0.92, -0.08, 0], [1.25, 0.68, 0.82]).castShadow = false;
+    sphere(cloud, 0.86, 0xffffff, [0.92, -0.1, 0], [1.3, 0.62, 0.82]).castShadow = false;
+    cloud.userData.basePosition = cloud.position.clone();
+    clouds.push(cloud);
+  }
+  return clouds;
+}
+
+function createSunnyHomeTown(): TownEnvironment {
+  const group = new THREE.Group();
+  group.name = "Sunny Side colourful 3D neighbourhood";
+  group.userData.kind = "town-environment";
+  group.userData.sceneName = "home";
+  group.userData.layoutVersion = "warm-village-v3";
+
+  const treeCrowns: TreeCrown[] = [];
+  const droplets: JetDrop[] = [];
+  const benches: THREE.Group[] = [];
+  const ground = cylinder(group, 31, 32, 0.18, 64, COLORS.grass, [0, -0.1, 0]);
+  ground.castShadow = false;
+  ground.receiveShadow = true;
+  addMesh(
+    group,
+    new THREE.RingGeometry(27.5, 30.7, 64),
+    patternedMaterial(COLORS.grassLight, "grass", { roughness: 1 }),
+    [0, 0.001, 0],
+    [-Math.PI / 2, 0, 0],
+  ).receiveShadow = true;
+
+  const distantClouds = createHomeBackdrop(group);
+  const canalWater = createCanal(group);
+  createHomeRoadNetwork(group);
+  createHomePlaza(group, droplets);
+  const grassDetails = createGrassDetails(group);
+
+  createCompactResidentHome(group, -9.8, 3.1, 0xffd5bf, 0xe16759, 0x438d78, 0.035, 0);
+  createCompactResidentHome(group, -15.2, 2.6, 0xd3ebea, 0x5f91bf, 0xe28a58, -0.03, 1);
+  createCompactResidentHome(group, -15.2, -8.9, 0xffe6a9, 0xe2874f, 0x5a9a78, 0.06, 2);
+  createCompactResidentHome(group, -3.1, -12.6, 0xd9e8fb, 0x6b8fc1, 0xd16d72, -0.03, 3);
+  createCompactResidentHome(group, 8.6, -10.5, 0xf6d5e5, 0xa86ea7, 0x557fa5, 0.05, 4);
+  createCompactResidentHome(group, 14.7, -8.5, 0xd8efcc, 0x68ac67, 0xdc7b55, -0.06, 5);
+  createCompactFacility(group, 14.5, 9.8, "community", Math.PI);
+  createCompactFacility(group, 7.9, -2.2, "cafe");
+  createCompactFacility(group, 8.4, 7.65, "market");
+
+  createFence(group, -12.4, 5.95, 5.4, 0.03);
+  createFence(group, -15.2, -6.45, 4.5, -0.03);
+  createFence(group, 14.5, 7.35, 4.7, Math.PI);
+  createMailbox(group, -7.6, 5.45, 0xd76561);
+  createMailbox(group, -13.1, -6.1, 0x5e8f84);
+  createMailbox(group, 12.3, 7.1, 0xe3a64d);
+  createTownSign(group, -2.85, 6.25);
+
+  const treeData: ReadonlyArray<readonly [number, number, number, number]> = [
+    [-13.1, 8.65, 1.02, 0.2],
+    [-17.8, -3.6, 0.88, 0.7],
+    [-12.4, -14.4, 1.02, 1.8],
+    [5.7, -14.8, 0.9, 2.6],
+    [17.2, -1.2, 0.98, 3.5],
+    [18.1, 5.8, 0.86, 0.9],
+    [10.8, 14.3, 1, 2.1],
+    [5.8, 12.7, 0.84, 3.8],
+    [-18.2, 12.6, 0.86, 1.1],
+  ];
+  for (const [x, z, scale, phase] of treeData) {
+    createTree(group, treeCrowns, x, z, scale, phase);
+  }
+
+  createFlowerPatch(group, -10.6, 6.55, 18, 1);
+  createFlowerPatch(group, -13.4, 7.45, 16, 3);
+  createFlowerPatch(group, 6.9, 12.8, 14, 4);
+  createFlowerPatch(group, 14.7, 3.1, 15, 7);
+  createFlowerPatch(group, -16.5, -3.5, 12, 9);
+  for (const [x, z, scale] of [
+    [-10.9, -0.15, 0.76],
+    [5.4, 5.8, 0.7],
+    [11.2, 4.9, 0.8],
+    [11.1, -5.1, 0.76],
+    [5.3, -5.6, 0.72],
+  ] as const) {
+    createBush(group, x, z, scale);
+  }
+
+  benches.push(createBench(group, -4.3, -4.25, -Math.PI / 2));
+  benches.push(createBench(group, -8.1, -0.15, Math.PI));
+  benches.push(createBench(group, -11.2, -5.2, Math.PI / 2));
+  benches.push(createBench(group, -5.2, 10.25, Math.PI / 2));
+  benches.push(createBench(group, -11.3, 8.25, -Math.PI / 2));
+
+  for (const [x, z] of [
+    [-3.1, -0.1],
+    [-3.2, 5.7],
+    [5.1, -0.2],
+    [5.2, 5.8],
+    [-5.1, -1.9],
+    [-12.2, -1.8],
+    [-14.2, -7.5],
+    [-7.7, -11.9],
+    [6.1, -6.2],
+    [11.4, 5.6],
+  ] as const) {
+    createLamp(group, x, z);
+  }
+
+  const plazaGlow = new THREE.PointLight(0xffcf76, 0.34, 8, 2);
+  plazaGlow.position.set(-7.7, 3.1, -5.2);
+  plazaGlow.castShadow = false;
+  group.add(plazaGlow);
+  const cafeGlow = new THREE.PointLight(0xffb56c, 0.24, 7, 2);
+  cafeGlow.position.set(7.9, 2.8, 0.2);
+  cafeGlow.castShadow = false;
+  group.add(cafeGlow);
+
+  const activityPoints: TownActivityPoint[] = [
+    { id: "home-rose", label: "晴花小屋", kind: "home", position: new THREE.Vector3(-9.8, 0, 5.25), radius: 1.7 },
+    { id: "sunny-cafe", label: "阳光咖啡馆", kind: "cafe", position: new THREE.Vector3(7.9, 0, 1.15), radius: 2.1 },
+    { id: "little-market", label: "小小杂货铺", kind: "shop", position: new THREE.Vector3(8.4, 0, 10.1), radius: 1.9 },
+    { id: "wish-fountain", label: "许愿喷泉", kind: "fountain", position: new THREE.Vector3(-7.7, 0, -5.2), radius: 3.25 },
+    { id: "pond-garden", label: "社区花园", kind: "garden", position: new THREE.Vector3(-8.5, 0, 10.2), radius: 3.2 },
+    { id: "windmill-lookout", label: "河畔远眺点", kind: "lookout", position: new THREE.Vector3(13.6, 0, -14.2), radius: 2.4 },
+  ];
+  group.userData.activeActivityId = "home-rose";
+  group.userData.activityPoints = activityPoints;
+  group.userData.benches = benches;
+
+  const grassMatrix = new THREE.Matrix4();
+  const grassRotation = new THREE.Quaternion();
+  const grassScale = new THREE.Vector3();
+  const grassEuler = new THREE.Euler(0, 0, 0, "YXZ");
+  const update = (time: number): void => {
+    if (!Number.isFinite(time)) return;
+    for (const drop of droplets) {
+      const progress = (time * 0.58 + drop.phase) % 1;
+      const distance = 0.28 + progress * 1.72;
+      drop.mesh.position.x = Math.cos(drop.angle) * distance;
+      drop.mesh.position.z = Math.sin(drop.angle) * distance;
+      drop.mesh.position.y = 2.98 + Math.sin(progress * Math.PI) * 1.08 - progress * 0.42;
+      drop.mesh.rotation.y = time * 1.8 + drop.phase * Math.PI * 2;
+      drop.mesh.visible = progress < 0.94;
+    }
+    for (const crown of treeCrowns) {
+      crown.group.rotation.z = Math.sin(time * 0.72 + crown.phase) * 0.025;
+      crown.group.rotation.x = Math.cos(time * 0.54 + crown.phase * 1.3) * 0.016;
+    }
+    for (let index = 0; index < grassDetails.tufts.length; index += 1) {
+      const tuft = grassDetails.tufts[index];
+      const breeze = 0.72 + Math.sin(time * 0.24 + tuft.phase * 0.43) * 0.18;
+      grassEuler.set(
+        Math.sin(time * 1.28 + tuft.phase) * 0.032 * breeze,
+        tuft.yaw,
+        Math.cos(time * 1.06 + tuft.phase * 1.37) * 0.021 * breeze,
+        "YXZ",
+      );
+      grassRotation.setFromEuler(grassEuler);
+      grassScale.setScalar(tuft.scale);
+      grassMatrix.compose(tuft.position, grassRotation, grassScale);
+      grassDetails.mesh.setMatrixAt(index, grassMatrix);
+    }
+    grassDetails.mesh.instanceMatrix.needsUpdate = true;
+    const waterMap = canalWater.material instanceof THREE.MeshPhysicalMaterial ? canalWater.material.map : null;
+    if (waterMap) {
+      waterMap.offset.x = (time * 0.012) % 1;
+      waterMap.offset.y = (Math.sin(time * 0.16) * 0.018 + 1) % 1;
+    }
+    distantClouds.forEach((cloud, index) => {
+      const base = cloud.userData.basePosition as THREE.Vector3;
+      cloud.position.x = base.x + Math.sin(time * 0.08 + index) * 0.3;
+      cloud.position.y = base.y + Math.cos(time * 0.22 + index * 1.7) * 0.08;
+    });
+    plazaGlow.intensity = 0.32 + Math.sin(time * 1.8) * 0.025;
+    cafeGlow.intensity = 0.23 + Math.sin(time * 1.45 + 0.8) * 0.02;
+  };
+
+  return { group, activityPoints, benches, update };
+}
+
 /**
  * Builds the full Sunny Side town. The caller owns attaching the returned group
  * to its scene, which keeps creation safe for scene transitions.
@@ -2798,6 +3429,7 @@ function createHomeInterior(): TownEnvironment {
 export function createTown(sceneName: TownSceneName): TownEnvironment {
   if (sceneName === "shop") return createShopInterior();
   if (sceneName === "interior") return createHomeInterior();
+  if (sceneName === "home") return createSunnyHomeTown();
 
   const group = new THREE.Group();
   group.name = "Sunny Side Town";
@@ -2844,10 +3476,10 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   createRoadNetwork(group);
   createPlaza(group, droplets);
   const parkPond = createParkPond(group);
-  // The opening portrait is a clean residential courtyard. The pond remains
-  // available in the plaza/cafe explorations without obscuring the hero cast.
-  parkPond.visible = sceneName !== "home";
-  createGrassDetails(group);
+  // The home scene returns its dedicated compact layout above, so the pond is
+  // always available in these plaza/cafe exploration scenes.
+  parkPond.visible = true;
+  const grassDetails = createGrassDetails(group);
 
   createHouse(group, -9.8, 3.1, 0xf4d8cb, 0xb95455, 0.04, 1.08);
   createHouse(group, -15.2, 2.6, 0xd8eadf, 0xc96950, -0.03, 1);
@@ -2907,7 +3539,7 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   benches.push(createBench(group, -8.1, 0.4, Math.PI));
   benches.push(createBench(group, -12.1, -5.2, Math.PI / 2));
   const courtyardBench = createBench(group, -5.2, 10.7, Math.PI / 2);
-  courtyardBench.visible = sceneName !== "home";
+  courtyardBench.visible = true;
   benches.push(courtyardBench);
   benches.push(createBench(group, -11.2, 8.2, -Math.PI / 2));
 
@@ -2979,18 +3611,17 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
     },
   ];
 
-  const activeActivityId =
-    sceneName === "home"
-      ? "home-rose"
-      : sceneName === "plaza"
-        ? "wish-fountain"
-        : "sunny-cafe";
+  const activeActivityId = sceneName === "plaza" ? "wish-fountain" : "sunny-cafe";
   group.userData.activeActivityId = activeActivityId;
 
   group.userData.activityPoints = activityPoints;
   group.userData.benches = benches;
 
   const windmillSails = group.getObjectByName("Windmill sails");
+  const grassMatrix = new THREE.Matrix4();
+  const grassRotation = new THREE.Quaternion();
+  const grassScale = new THREE.Vector3();
+  const grassEuler = new THREE.Euler(0, 0, 0, "YXZ");
   const update = (time: number): void => {
     if (!Number.isFinite(time)) return;
 
@@ -3008,6 +3639,19 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
       crown.group.rotation.z = Math.sin(time * 0.72 + crown.phase) * 0.025;
       crown.group.rotation.x = Math.cos(time * 0.54 + crown.phase * 1.3) * 0.016;
     }
+
+    for (let index = 0; index < grassDetails.tufts.length; index += 1) {
+      const tuft = grassDetails.tufts[index];
+      const breeze = 0.72 + Math.sin(time * 0.24 + tuft.phase * 0.43) * 0.18;
+      const tiltX = Math.sin(time * 1.28 + tuft.phase) * 0.032 * breeze;
+      const tiltZ = Math.cos(time * 1.06 + tuft.phase * 1.37) * 0.021 * breeze;
+      grassEuler.set(tiltX, tuft.yaw, tiltZ, "YXZ");
+      grassRotation.setFromEuler(grassEuler);
+      grassScale.setScalar(tuft.scale);
+      grassMatrix.compose(tuft.position, grassRotation, grassScale);
+      grassDetails.mesh.setMatrixAt(index, grassMatrix);
+    }
+    grassDetails.mesh.instanceMatrix.needsUpdate = true;
 
     if (windmillSails) windmillSails.rotation.z = -time * 0.22;
 
