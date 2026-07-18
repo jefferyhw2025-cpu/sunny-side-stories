@@ -1,8 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CharacterPreview3D from "./CharacterPreview3D";
+import LifeSystemUI, { type PlayerSettings } from "./LifeSystemUI";
 import World3D from "./World3D";
+import { playGameSound } from "./game/audio";
+import {
+  ACTIVITY_CATALOG,
+  ITEM_CATALOG,
+  createDefaultLifeGameState,
+  deserializeLifeGameState,
+  executeLifeAction,
+  getLocalDayKey,
+  serializeLifeGameState,
+  type ActivityId,
+  type ItemId,
+  type LifeAction,
+} from "./game/lifeSystems";
 
 type TimeOfDay = "day" | "sunset" | "night";
 type WeatherMode = "clear" | "rain" | "snow";
@@ -32,9 +46,9 @@ type Person = {
 type StyleOption = { value: number; label: string; glyph: string };
 
 const starterPeople: Person[] = [
-  { id: 1, name: "小满", color: "#ffcc9c", hair: "#56331f", shirt: "#ef735f", hairStyle: 4, faceShape: 1, eyeStyle: 3, browStyle: 2, noseStyle: 0, mouthStyle: 2, outfitStyle: 5, mood: 82, food: 61, energy: 74, friend: 45, trait: "天马行空", dream: "在广场举办一场演唱会" },
-  { id: 2, name: "阿奇", color: "#9b623f", hair: "#1d1714", shirt: "#e3ad3f", hairStyle: 8, faceShape: 2, eyeStyle: 0, browStyle: 5, noseStyle: 3, mouthStyle: 4, outfitStyle: 2, mood: 66, food: 78, energy: 48, friend: 45, trait: "热情冒险", dream: "做出全城最好吃的蛋包饭" },
-  { id: 3, name: "露露", color: "#f1b88f", hair: "#e85e69", shirt: "#54a98e", hairStyle: 1, faceShape: 0, eyeStyle: 7, browStyle: 1, noseStyle: 6, mouthStyle: 0, outfitStyle: 3, mood: 74, food: 52, energy: 88, friend: 32, trait: "温柔细腻", dream: "交到三个真正的好朋友" },
+  { id: 1, name: "小满", color: "#efb18e", hair: "#70422d", shirt: "#e3ad3f", hairStyle: 6, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 82, food: 61, energy: 74, friend: 45, trait: "天马行空", dream: "在广场举办一场演唱会" },
+  { id: 2, name: "阿奇", color: "#efb18e", hair: "#201b19", shirt: "#54a98e", hairStyle: 8, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 66, food: 78, energy: 48, friend: 45, trait: "热情冒险", dream: "做出全城最好吃的蛋包饭" },
+  { id: 3, name: "露露", color: "#ffd0a6", hair: "#e1b84b", shirt: "#7ca9d6", hairStyle: 1, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 3, mood: 74, food: 52, energy: 88, friend: 32, trait: "温柔细腻", dream: "交到三个真正的好朋友" },
 ];
 
 const scenes = [
@@ -75,13 +89,37 @@ const outfitOptions: StyleOption[] = [
   ["运动装", "动"], ["针织衫", "织"], ["水手服", "海"], ["连帽衫", "帽"],
 ].map(([label, glyph], value) => ({ value, label, glyph }));
 
-const happenings = [
-  "在路边捡到一顶会发光的帽子，所有人都想试戴。",
-  "突然决定练习唱歌，隔壁居民忍不住跟着合唱。",
-  "把盐当成糖做进了蛋糕，意外成为今日限定口味。",
-  "收到一封没有署名的赞美信，开心得原地转了三圈。",
-  "和朋友为最后一块披萨石头剪刀布，结果打成了七次平手。",
-];
+const WEATHER_SLOT_MINUTES = 180;
+const DEFAULT_SETTINGS: PlayerSettings = { sound: true, hints: true, reducedEffects: false };
+
+function localDayIndex(date: Date): number {
+  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000);
+}
+
+function timePhase(date: Date): TimeOfDay {
+  const minute = date.getHours() * 60 + date.getMinutes();
+  if (minute >= 6 * 60 && minute < 17 * 60) return "day";
+  if (minute >= 17 * 60 && minute < 20 * 60) return "sunset";
+  return "night";
+}
+
+function seededRoll(seed: number, slot: number): number {
+  let value = (seed ^ Math.imul(slot, 0x9e3779b1)) >>> 0;
+  value = Math.imul(value ^ (value >>> 16), 0x21f0aaad);
+  value = Math.imul(value ^ (value >>> 15), 0x735a2d97);
+  return ((value ^ (value >>> 15)) >>> 0) / 4_294_967_296;
+}
+
+function automaticWeather(date: Date, seed: number): WeatherMode {
+  const minute = date.getHours() * 60 + date.getMinutes();
+  const slot = localDayIndex(date) * (1440 / WEATHER_SLOT_MINUTES) + Math.floor(minute / WEATHER_SLOT_MINUTES);
+  const roll = seededRoll(seed, slot);
+  const month = date.getMonth();
+  const winter = month === 11 || month <= 1;
+  if (winter && roll < 0.16) return "snow";
+  if (roll < (winter ? 0.36 : 0.27)) return "rain";
+  return "clear";
+}
 
 function Face({ person, big = false }: { person: Person; big?: boolean }) {
   return (
@@ -124,10 +162,14 @@ export default function Home() {
   const [people, setPeople] = useState<Person[]>(starterPeople);
   const [selected, setSelected] = useState(1);
   const [scene, setScene] = useState<string>("home");
-  const [coins, setCoins] = useState(120);
-  const [day, setDay] = useState(1);
-  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>("day");
-  const [weatherMode, setWeatherMode] = useState<WeatherMode>("clear");
+  const [lifeState, setLifeState] = useState(() => createDefaultLifeGameState({ now: 0, dayKey: "1970-01-01" }));
+  const lifeStateRef = useRef(lifeState);
+  const [playerSettings, setPlayerSettings] = useState<PlayerSettings>(DEFAULT_SETTINGS);
+  const [mapMarker, setMapMarker] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  const [firstPlayedDay, setFirstPlayedDay] = useState<number | null>(null);
+  const [weatherSeed, setWeatherSeed] = useState(1);
+  const [lastProcessedDay, setLastProcessedDay] = useState<number | null>(null);
   const [storyLog, setStoryLog] = useState<string[]>(["欢迎来到晴天市！小满刚搬进了阳光街区。"]);
   const [saveReady, setSaveReady] = useState(false);
   const [immersive, setImmersive] = useState(false);
@@ -149,29 +191,113 @@ export default function Home() {
   const [dialogue, setDialogue] = useState<{ speaker: string; text: string; response: string } | null>(null);
   const [actionMoment, setActionMoment] = useState<{ kind: ActionKind; text: string; token: number } | null>(null);
 
+  const currentDate = nowMs === null ? null : new Date(nowMs);
+  const currentDay = currentDate ? localDayIndex(currentDate) : null;
+  const day = currentDay === null || firstPlayedDay === null ? 1 : Math.max(1, currentDay - firstPlayedDay + 1);
+  const timeOfDay = currentDate ? timePhase(currentDate) : "day";
+  const weatherMode = currentDate ? automaticWeather(currentDate, weatherSeed) : "clear";
+  const coins = lifeState.wallet.coins;
+  const clockLabel = currentDate
+    ? currentDate.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
+    : "--:--";
+
+  useEffect(() => {
+    const updateClock = () => setNowMs(Date.now());
+    updateClock();
+    const timer = window.setInterval(updateClock, 30_000);
+    const resumeClock = () => {
+      if (!document.hidden) updateClock();
+    };
+    document.addEventListener("visibilitychange", resumeClock);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", resumeClock);
+    };
+  }, []);
+
+  useEffect(() => {
+    lifeStateRef.current = lifeState;
+  }, [lifeState]);
+
   useEffect(() => {
     const loadTimer = window.setTimeout(() => {
+      const now = Date.now();
+      const todayDate = new Date(now);
+      const today = localDayIndex(todayDate);
+      let legacyCoins: number | undefined;
       const saved = localStorage.getItem("sunny-life-save");
       if (saved) {
         try {
-          const parsed = JSON.parse(saved) as Partial<{ people: Person[]; coins: number; day: number; log: string[]; timeOfDay: TimeOfDay; weatherMode: WeatherMode }>;
+          const parsed = JSON.parse(saved) as Partial<{ people: Person[]; coins: number; day: number; log: string[]; firstPlayedDay: number; weatherSeed: number; lastProcessedDay: number }>;
           if (Array.isArray(parsed.people) && parsed.people.length > 0) setPeople(parsed.people);
-          if (typeof parsed.coins === "number") setCoins(parsed.coins);
-          if (typeof parsed.day === "number") setDay(parsed.day);
+          if (typeof parsed.coins === "number") legacyCoins = parsed.coins;
           if (Array.isArray(parsed.log)) setStoryLog(parsed.log);
-          if (["day", "sunset", "night"].includes(parsed.timeOfDay || "")) setTimeOfDay(parsed.timeOfDay as TimeOfDay);
-          if (["clear", "rain", "snow"].includes(parsed.weatherMode || "")) setWeatherMode(parsed.weatherMode as WeatherMode);
+          const oldDay = Math.max(1, typeof parsed.day === "number" ? parsed.day : 1);
+          setFirstPlayedDay(typeof parsed.firstPlayedDay === "number" ? parsed.firstPlayedDay : today - (oldDay - 1));
+          if (typeof parsed.weatherSeed === "number") setWeatherSeed(parsed.weatherSeed);
+          else {
+            const seed = new Uint32Array(1);
+            window.crypto.getRandomValues(seed);
+            setWeatherSeed(seed[0] || 1);
+          }
+          setLastProcessedDay(typeof parsed.lastProcessedDay === "number" ? parsed.lastProcessedDay : today);
         } catch {
           /* Old and invalid saves safely start with the built-in town. */
+          setFirstPlayedDay(today);
+          setLastProcessedDay(today);
         }
+      } else {
+        const seed = new Uint32Array(1);
+        window.crypto.getRandomValues(seed);
+        setFirstPlayedDay(today);
+        setWeatherSeed(seed[0] || 1);
+        setLastProcessedDay(today);
       }
+      const storedLifeState = localStorage.getItem("sunny-life-systems-v1");
+      const restoredLifeState = deserializeLifeGameState(storedLifeState, { now, dayKey: getLocalDayKey(todayDate) });
+      if (!storedLifeState && typeof legacyCoins === "number") restoredLifeState.wallet.coins = Math.max(0, legacyCoins);
+      setLifeState(restoredLifeState);
+      try {
+        const storedSettings = JSON.parse(localStorage.getItem("sunny-life-settings-v1") ?? "null") as Partial<PlayerSettings> | null;
+        if (storedSettings) setPlayerSettings({
+          sound: typeof storedSettings.sound === "boolean" ? storedSettings.sound : true,
+          hints: typeof storedSettings.hints === "boolean" ? storedSettings.hints : true,
+          reducedEffects: typeof storedSettings.reducedEffects === "boolean" ? storedSettings.reducedEffects : false,
+        });
+      } catch {
+        /* Invalid UI preferences fall back to comfortable defaults. */
+      }
+      const storedMarker = localStorage.getItem("sunny-life-map-marker");
+      if (storedMarker && scenes.some((item) => item.id === storedMarker)) setMapMarker(storedMarker);
       setSaveReady(true);
     }, 0);
     return () => window.clearTimeout(loadTimer);
   }, []);
   useEffect(() => {
-    if (saveReady) localStorage.setItem("sunny-life-save", JSON.stringify({ people, coins, day, log: storyLog, timeOfDay, weatherMode }));
-  }, [saveReady, people, coins, day, storyLog, timeOfDay, weatherMode]);
+    if (saveReady && firstPlayedDay !== null && lastProcessedDay !== null) {
+      localStorage.setItem("sunny-life-save", JSON.stringify({ people, coins, log: storyLog, firstPlayedDay, weatherSeed, lastProcessedDay }));
+      localStorage.setItem("sunny-life-systems-v1", serializeLifeGameState(lifeState));
+      localStorage.setItem("sunny-life-settings-v1", JSON.stringify(playerSettings));
+      if (mapMarker) localStorage.setItem("sunny-life-map-marker", mapMarker);
+      else localStorage.removeItem("sunny-life-map-marker");
+    }
+  }, [saveReady, people, coins, storyLog, firstPlayedDay, weatherSeed, lastProcessedDay, lifeState, playerSettings, mapMarker]);
+  useEffect(() => {
+    if (!saveReady || currentDay === null || lastProcessedDay === null || currentDay <= lastProcessedDay) return;
+    const elapsedDays = Math.min(7, currentDay - lastProcessedDay);
+    const timer = window.setTimeout(() => {
+      const nextDate = new Date();
+      setLifeState((current) => executeLifeAction(current, { type: "day/sync", at: nextDate.getTime(), dayKey: getLocalDayKey(nextDate) }).state);
+      setPeople((current) => current.map((resident) => ({
+        ...resident,
+        food: Math.max(12, resident.food - elapsedDays * 10),
+        energy: Math.max(15, resident.energy - elapsedDays * 7),
+      })));
+      setStoryLog((current) => [`真实时间来到了新的一天，晴天市的居民又开始四处活动了！`, ...current].slice(0, 6));
+      setLastProcessedDay(currentDay);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [saveReady, currentDay, lastProcessedDay]);
   useEffect(() => {
     if (!actionMoment) return;
     const timer = window.setTimeout(() => setActionMoment(null), 4200);
@@ -192,6 +318,7 @@ export default function Home() {
 
   const person = people.find((candidate) => candidate.id === selected) || people[0];
   const activeScene = scenes.find((item) => item.id === scene) || scenes[0];
+  const relationshipAffinity = lifeState.relationships[String(person.id)]?.affinity ?? person.friend;
   const worldResidents = useMemo(() => people.map((resident) => ({
     id: resident.id,
     name: resident.name,
@@ -228,17 +355,97 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2300);
   };
   const change = (updates: Partial<Person>) => setPeople((current) => current.map((resident) => resident.id === person.id ? { ...resident, ...updates } : resident));
+  const performLifeAction = (action: LifeAction): boolean => {
+    const currentLifeState = lifeStateRef.current;
+    const at = Math.max(currentLifeState.updatedAt + 1, nowMs ?? 0);
+    const timedAction = { ...action, at, dayKey: getLocalDayKey(at) } as LifeAction;
+    const result = executeLifeAction(currentLifeState, timedAction);
+    lifeStateRef.current = result.state;
+    setLifeState(result.state);
+    if (!result.ok) {
+      playGameSound("error", playerSettings.sound);
+      notify(result.error?.message ?? "这项操作现在还不能完成。");
+      return false;
+    }
+    const importantEffect = [...result.effects].reverse().find((effect) => effect.kind !== "skill");
+    if (importantEffect) notify(importantEffect.message);
+    playGameSound(result.effects.some((effect) => effect.kind === "achievement" || effect.kind === "quest") ? "reward" : "confirm", playerSettings.sound);
+    return true;
+  };
+  const startActivity = (activityId: ActivityId) => {
+    if (!performLifeAction({ type: "activity/complete", activityId })) return;
+    const activity = ACTIVITY_CATALOG[activityId];
+    const kind: ActionKind = activity.event === "cook" ? "food" : "play";
+    const token = lifeStateRef.current.revision;
+    setWorldAction({ kind, token });
+    setDialogue(null);
+    setActionMoment({ kind, text: `${person.name}${activity.name}完成了！${activity.description}`, token });
+    setStoryLog((current) => [`${person.name}完成了${activity.name}，${activity.skillId}经验增加了。`, ...current].slice(0, 6));
+  };
+  const consumeOrEquipItem = (itemId: ItemId) => {
+    const item = ITEM_CATALOG[itemId];
+    if (item.equipmentSlot) {
+      performLifeAction({ type: "inventory/equip", itemId });
+      return;
+    }
+    if (item.category === "food" || item.category === "dish") {
+      if (!performLifeAction({ type: "inventory/remove", itemId, quantity: 1 })) return;
+      const token = lifeStateRef.current.revision;
+      change({ food: Math.min(100, person.food + (item.category === "dish" ? 34 : 18)), mood: Math.min(100, person.mood + 4) });
+      setWorldAction({ kind: "food", token });
+      setActionMoment({ kind: "food", text: `${person.name}吃了${item.name}，感觉精神多了。`, token });
+      setStoryLog((current) => [`${person.name}吃了${item.name}。`, ...current].slice(0, 6));
+      return;
+    }
+    if (item.giftable) {
+      if (!performLifeAction({ type: "social/gift", residentId: String(person.id), itemId, preference: itemId === "wildflower" || itemId === "friendship_bracelet" ? "loved" : "liked" })) return;
+      change({ friend: Math.min(100, person.friend + 9) });
+      return;
+    }
+    notify(`${item.name}需要在对应生活活动中使用。`);
+  };
+  const visitScene = (sceneId: string) => {
+    setScene(sceneId);
+    setWorldAction(null);
+    setDialogue(null);
+    setActionMoment(null);
+    performLifeAction({ type: "world/explore", sceneId });
+  };
+  const saveGame = () => {
+    if (!saveReady || firstPlayedDay === null || lastProcessedDay === null) return notify("小城还在准备存档，请稍等一下。");
+    localStorage.setItem("sunny-life-save", JSON.stringify({ people, coins, log: storyLog, firstPlayedDay, weatherSeed, lastProcessedDay }));
+    localStorage.setItem("sunny-life-systems-v1", serializeLifeGameState(lifeState));
+    localStorage.setItem("sunny-life-settings-v1", JSON.stringify(playerSettings));
+    playGameSound("reward", playerSettings.sound);
+    notify("已保存人物、任务、背包、关系和地图进度。");
+  };
+  const takePhoto = () => {
+    window.dispatchEvent(new Event("sunny-life:photo"));
+    playGameSound("open", playerSettings.sound);
+    notify("正在保存这张实时 3D 小城照片……");
+  };
   const act = (kind: ActionKind) => {
     const action = {
-      talk: { text: `${person.name}和邻居聊起了最近的梦想，关系更亲近了！`, cost: 0, mood: 8, friend: 7, energy: -4 },
-      food: { text: `${person.name}品尝了热乎乎的云朵松饼，幸福感正在上升。`, cost: 15, mood: 5, friend: 0, energy: 4 },
-      play: { text: `${person.name}参加了广场泡泡赛，在欢呼声中冲过终点！`, cost: 5, mood: 13, friend: 3, energy: -10 },
-      rest: { text: `${person.name}回到温暖的房间休息，做了一个会飞的梦。`, cost: 0, mood: 3, friend: 0, energy: 22 },
+      talk: { text: `${person.name}和邻居聊起了最近的梦想，关系更亲近了！`, mood: 8, friend: 7, energy: -4 },
+      food: { text: `${person.name}吃了背包里的食物，幸福感正在上升。`, mood: 5, friend: 0, energy: 4 },
+      play: { text: `${person.name}在广场完成了一次小表演，大家都很开心！`, mood: 13, friend: 3, energy: -10 },
+      rest: { text: `${person.name}回到温暖的房间休息，做了一个会飞的梦。`, mood: 3, friend: 0, energy: 22 },
     }[kind];
-    if (coins < action.cost) return notify("金币不够啦，去咖啡店打工吧！");
-    setCoins((current) => current - action.cost + (kind === "talk" ? 3 : 0));
+    if (kind === "talk" && !performLifeAction({ type: "social/talk", residentId: String(person.id) })) return;
+    if (kind === "food") {
+      const foodItem: ItemId | null = (lifeState.inventory.items.vegetable_soup ?? 0) > 0 ? "vegetable_soup" : (lifeState.inventory.items.apple ?? 0) > 0 ? "apple" : null;
+      if (!foodItem) return notify("背包里没有食物，先去种植或做饭吧！");
+      consumeOrEquipItem(foodItem);
+      return;
+    }
+    if (kind === "play") {
+      setScene("plaza");
+      startActivity("social:plaza-performance");
+      change({ mood: Math.min(100, person.mood + action.mood), friend: Math.min(100, person.friend + action.friend), energy: Math.max(0, person.energy + action.energy), food: Math.max(0, person.food - 4) });
+      return;
+    }
     change({ mood: Math.min(100, person.mood + action.mood), friend: Math.min(100, person.friend + action.friend), energy: Math.max(0, Math.min(100, person.energy + action.energy)), food: kind === "food" ? Math.min(100, person.food + 25) : Math.max(0, person.food - 4) });
-    const token = Date.now();
+    const token = lifeStateRef.current.revision;
     setWorldAction({ kind, token });
     setStoryLog((current) => [action.text, ...current].slice(0, 6));
     if (kind === "talk") {
@@ -248,17 +455,6 @@ export default function Home() {
       setDialogue(null);
       setActionMoment({ kind, text: action.text, token });
     }
-  };
-  const nextDay = () => {
-    const text = `${person.name}${happenings[(day + person.id) % happenings.length]}`;
-    setWorldAction(null);
-    setDialogue(null);
-    setActionMoment(null);
-    setDay((current) => current + 1);
-    setCoins((current) => current + 20);
-    setPeople((current) => current.map((resident) => ({ ...resident, food: Math.max(12, resident.food - 10), energy: Math.max(15, resident.energy - 7) })));
-    setStoryLog((current) => [text, ...current].slice(0, 6));
-    notify("新的一天，发生了新鲜事！");
   };
   const createPerson = () => {
     if (!name.trim()) return notify("先给新居民起一个名字吧！");
@@ -288,37 +484,52 @@ export default function Home() {
   }[weatherMode];
 
   return (
-    <main className={`game-shell ${immersive ? "immersive-mode" : ""}`}>
+    <main className={`game-shell ${immersive ? "immersive-mode" : ""} ${playerSettings.reducedEffects ? "reduce-effects" : ""}`}>
       <header>
         <div className="brand"><span className="sun-mark">☀</span><div><b>晴天生活</b><small>SUNNY SIDE STORIES</small></div></div>
-        <div className="top-stats"><span>第 {day} 天</span><span>{weather.icon} {weather.label} · {atmosphere.label}</span><span className="coin">●</span><strong>{coins}</strong></div>
+        <div className="top-stats"><span>第 {day} 天 · {clockLabel}</span><span>{weather.icon} {weather.label} · {atmosphere.label}</span><span className="coin">●</span><strong>{coins}</strong></div>
         <button className="immersive-entry" type="button" aria-pressed={immersive} onClick={() => setImmersive(true)} aria-label="进入沉浸画面"><b>⛶</b><span>沉浸画面</span></button>
-        <button className="next-day" onClick={nextDay}>度过一天 <span>›</span></button>
       </header>
 
       <section className={`world atmosphere-${timeOfDay} weather-${weatherMode}`} aria-label={`${activeScene.name}三维场景`}>
         <World3D scene={scene} selectedId={person.id} residents={worldResidents} actionCue={worldAction} timeOfDay={timeOfDay} weatherMode={weatherMode} cinematicView={immersive} />
         <button className="immersive-exit" type="button" onClick={() => setImmersive(false)} aria-label="退出沉浸画面并返回居民面板"><span>‹</span> 返回居民面板</button>
         <div className="city-title"><span>{activeScene.icon}</span><div><b>{activeScene.name}</b><small>{activeScene.hint}</small></div></div>
-        <div className="world-controls" aria-label="场景环境设置">
-          <div role="group" aria-label="时间"><span>时间</span>{(["day", "sunset", "night"] as TimeOfDay[]).map((value) => <button type="button" key={value} aria-pressed={timeOfDay === value} className={timeOfDay === value ? "active" : ""} onClick={() => setTimeOfDay(value)}>{value === "day" ? "☀ 白天" : value === "sunset" ? "◐ 黄昏" : "☾ 夜晚"}</button>)}</div>
-          <div role="group" aria-label="天气"><span>天气</span>{(["clear", "rain", "snow"] as WeatherMode[]).map((value) => <button type="button" key={value} aria-pressed={weatherMode === value} className={weatherMode === value ? "active" : ""} onClick={() => setWeatherMode(value)}>{value === "clear" ? "☀ 晴朗" : value === "rain" ? "☂ 雨天" : "❄ 飘雪"}</button>)}</div>
+        <div className="world-controls world-auto-controls" aria-label="自动环境状态">
+          <div><span>时间</span><strong>{atmosphere.icon} {clockLabel} · {atmosphere.label}</strong><small>自动</small></div>
+          <div><span>天气</span><strong>{weather.icon} {weather.label}</strong><small>自动</small></div>
         </div>
         {!dialogue && !actionMoment && <div className="scene-dialogue"><Face person={person}/><div><b>{person.name}</b><span>{scenePrompt[scene] || scenePrompt.home}</span></div></div>}
         {actionMoment && <div className={`action-moment action-${actionMoment.kind}`} role="status" aria-live="polite"><span>{actionMoment.kind === "food" ? "♨" : actionMoment.kind === "play" ? "✦" : "☾"}</span><p>{actionMoment.text}</p><button type="button" onClick={() => setActionMoment(null)} aria-label="关闭提示">×</button></div>}
         {dialogue && <div className="cinematic-dialogue" role="dialog" aria-label={`与${dialogue.speaker}对话`}><Face person={person} big/><div><b>{dialogue.speaker}</b><p>{dialogue.text}</p><button type="button" onClick={() => { setDialogue(null); setWorldAction(null); notify("你们约好了，下次一起出发！"); }}>{dialogue.response}</button></div><button className="dialogue-close" type="button" onClick={() => { setDialogue(null); setWorldAction(null); }} aria-label="结束对话">×</button></div>}
         <nav className="places" aria-label="地点">
-          {scenes.map((item) => <button key={item.id} className={scene === item.id ? "active" : ""} onClick={() => { setScene(item.id); setWorldAction(null); setDialogue(null); setActionMoment(null); }}><span>{item.icon}</span>{item.name}</button>)}
+          {scenes.map((item) => <button key={item.id} className={scene === item.id ? "active" : ""} onClick={() => visitScene(item.id)}><span>{item.icon}</span>{item.name}</button>)}
         </nav>
+        <LifeSystemUI
+          state={lifeState}
+          resident={{ id: person.id, name: person.name }}
+          scene={scene}
+          scenes={scenes}
+          marker={mapMarker}
+          settings={playerSettings}
+          onAction={performLifeAction}
+          onActivity={startActivity}
+          onUseItem={consumeOrEquipItem}
+          onSceneChange={visitScene}
+          onMarkerChange={setMapMarker}
+          onSettingsChange={setPlayerSettings}
+          onPhoto={takePhoto}
+          onSave={saveGame}
+        />
       </section>
 
       <aside className="panel">
         <div className="panel-title"><div><small>当前居民</small><h1>{person.name}</h1></div><button onClick={() => setShowCreate(true)}>＋ 设计新居民</button></div>
         <div className="resident-card"><Face person={person} big/><div className="bio"><span>{person.trait}</span><p>梦想：{person.dream}</p></div></div>
         <div className="meters">
-          {([['心情','♥',person.mood,'pink'],['饱腹','●',person.food,'orange'],['精力','⚡',person.energy,'blue'],['友情','★',person.friend,'green']] as const).map(([label, icon, value, cls]) => <div className="meter" key={label}><span>{icon} {label}</span><div><i className={cls} style={{width:`${value}%`}}/></div><b>{value}</b></div>)}
+          {([['心情','♥',person.mood,'pink'],['饱腹','●',person.food,'orange'],['精力','⚡',person.energy,'blue'],['友情','★',relationshipAffinity,'green']] as const).map(([label, icon, value, cls]) => <div className="meter" key={label}><span>{icon} {label}</span><div><i className={cls} style={{width:`${value}%`}}/></div><b>{value}</b></div>)}
         </div>
-        <div className="actions"><button onClick={() => act("talk")}><span>☻</span>聊聊天</button><button onClick={() => act("food")}><span>♨</span>吃东西<small>-15</small></button><button onClick={() => act("play")}><span>✦</span>去玩耍<small>-5</small></button><button onClick={() => act("rest")}><span>☾</span>休息</button></div>
+        <div className="actions"><button onClick={() => act("talk")}><span>☻</span>聊聊天</button><button onClick={() => act("food")}><span>♨</span>吃东西<small>背包</small></button><button onClick={() => act("play")}><span>✦</span>去玩耍<small>＋经验</small></button><button onClick={() => act("rest")}><span>☾</span>休息</button></div>
         <div className="resident-list"><b>城里居民 <em>{people.length}</em></b><div>{people.map((resident) => <button key={resident.id} className={selected === resident.id ? "chosen" : ""} onClick={() => { setSelected(resident.id); setWorldAction(null); setDialogue(null); setActionMoment(null); }}><Face person={resident}/><span>{resident.name}</span></button>)}</div></div>
       </aside>
 

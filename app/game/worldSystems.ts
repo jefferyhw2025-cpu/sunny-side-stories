@@ -44,12 +44,21 @@ export interface ResidentHandle {
   readonly group: THREE.Group;
   readonly home: THREE.Vector3;
   readonly velocity: THREE.Vector3;
+  readonly radius: number;
   readonly state: ResidentState;
   readonly stateTime: number;
   readonly stateDuration: number;
   readonly target: THREE.Vector3 | null;
   readonly partner: ResidentHandle | null;
   readonly userData: unknown;
+}
+
+export interface ResidentControlOptions {
+  /** Camera/world-space direction. Magnitude is ignored after the dead zone. */
+  direction?: PointLike;
+  /** A world-space click/tap destination. Mutually exclusive with direction. */
+  destination?: PointLike;
+  run?: boolean;
 }
 
 export interface ResidentAnimationFrame {
@@ -208,6 +217,11 @@ export interface WorldDirector {
     options?: SetResidentStateOptions,
   ): boolean;
   moveTo(reference: ResidentReference, target: PointLike, options?: MoveResidentOptions): boolean;
+  /**
+   * Claim or release direct player control for one resident. A zero direction
+   * keeps the resident player-controlled and idle; null returns it to AI.
+   */
+  setControl(reference: ResidentReference, control: ResidentControlOptions | null): boolean;
   startConversation(
     first: ResidentReference,
     second: ResidentReference,
@@ -471,6 +485,11 @@ interface ResidentRuntime extends ResidentHandle {
   readonly acceleration: number;
   readonly headingOffset: number;
   readonly lockY: boolean;
+  control: {
+    readonly direction: THREE.Vector3 | null;
+    readonly destination: THREE.Vector3 | null;
+    readonly run: boolean;
+  } | null;
   chatCooldown: number;
 }
 
@@ -526,6 +545,7 @@ class WorldDirectorImpl implements WorldDirector {
         acceleration: positiveOr(definition.acceleration, 8),
         headingOffset: finiteOr(definition.headingOffset, 0),
         lockY: definition.lockY ?? true,
+        control: null,
         chatCooldown: this.random() * positiveOr(options.conversationCooldown, 5),
         userData: definition.userData,
       };
@@ -556,6 +576,7 @@ class WorldDirectorImpl implements WorldDirector {
   ): boolean {
     const resident = this.findRuntime(reference);
     if (!resident) return false;
+    resident.control = null;
     const target = options.target
       ? copyPoint(new THREE.Vector3(), options.target, resident.worldPosition.y)
       : undefined;
@@ -570,6 +591,7 @@ class WorldDirectorImpl implements WorldDirector {
   ): boolean {
     const resident = this.findRuntime(reference);
     if (!resident) return false;
+    resident.control = null;
     const destination = copyPoint(new THREE.Vector3(), target, resident.worldPosition.y);
     this.transition(
       resident,
@@ -581,6 +603,35 @@ class WorldDirectorImpl implements WorldDirector {
     return true;
   }
 
+  setControl(reference: ResidentReference, control: ResidentControlOptions | null): boolean {
+    const resident = this.findRuntime(reference);
+    if (!resident) return false;
+    if (!control) {
+      resident.control = null;
+      return true;
+    }
+
+    const direction = control.direction
+      ? copyPoint(new THREE.Vector3(), control.direction, 0).setY(0)
+      : null;
+    if (direction && direction.lengthSq() > 0.0025) direction.normalize();
+    else direction?.set(0, 0, 0);
+    const destination = control.destination
+      ? copyPoint(new THREE.Vector3(), control.destination, resident.worldPosition.y)
+      : null;
+    if (destination) this.clampToBounds(destination, resident);
+    resident.control = { direction, destination, run: Boolean(control.run) };
+
+    const moving = Boolean((direction && direction.lengthSq() > 0) || destination);
+    const nextState: ResidentState = moving ? (control.run ? "run" : "walk") : "idle";
+    if (resident.state !== nextState) {
+      this.transition(resident, nextState, moving ? "player-control" : "player-stop");
+    }
+    resident.target = destination?.clone() ?? null;
+    if (!moving) resident.desiredVelocity.set(0, 0, 0);
+    return true;
+  }
+
   startConversation(
     firstReference: ResidentReference,
     secondReference: ResidentReference,
@@ -589,6 +640,8 @@ class WorldDirectorImpl implements WorldDirector {
     const first = this.findRuntime(firstReference);
     const second = this.findRuntime(secondReference);
     if (!first || !second || first === second) return false;
+    first.control = null;
+    second.control = null;
     this.detachPartner(first, "conversation-replaced");
     this.detachPartner(second, "conversation-replaced");
     first.partner = second;
@@ -626,6 +679,7 @@ class WorldDirectorImpl implements WorldDirector {
       this.faceResident(resident, delta);
       this.emitAnimation(resident, delta);
     }
+    this.resolveAllResidentCollisions();
     this.camera?.update(delta, this.elapsed);
   }
 
@@ -672,7 +726,9 @@ class WorldDirectorImpl implements WorldDirector {
     resident.stateTime = 0;
     resident.stateDuration = positiveOr(duration, this.sampleDuration(resident, state));
     resident.target = target?.clone() ?? null;
-    if ((state === "walk" || state === "run") && !resident.target) this.chooseTarget(resident);
+    if ((state === "walk" || state === "run") && !resident.target && !resident.control) {
+      this.chooseTarget(resident);
+    }
     if (state !== "walk" && state !== "run") {
       resident.desiredVelocity.set(0, 0, 0);
     }
@@ -698,6 +754,7 @@ class WorldDirectorImpl implements WorldDirector {
   }
 
   private advanceState(resident: ResidentRuntime): void {
+    if (resident.control) return;
     if (resident.state === "talk" && !resident.partner) {
       this.transition(resident, "idle", "partner-left");
       return;
@@ -753,6 +810,37 @@ class WorldDirectorImpl implements WorldDirector {
   }
 
   private planVelocity(resident: ResidentRuntime): void {
+    if (resident.control) {
+      const { direction, destination, run } = resident.control;
+      const speed = run ? resident.runSpeed : resident.walkSpeed;
+      if (destination) {
+        resident.desiredVelocity.copy(destination).sub(resident.worldPosition).setY(0);
+        const distance = resident.desiredVelocity.length();
+        if (distance <= positiveOr(this.options.arrivalDistance, 0.14)) {
+          resident.control = {
+            direction: new THREE.Vector3(),
+            destination: null,
+            run: false,
+          };
+          resident.velocity.set(0, 0, 0);
+          this.transition(resident, "idle", "player-arrived");
+          return;
+        }
+        const movingState: ResidentState = run ? "run" : "walk";
+        if (resident.state !== movingState) this.transition(resident, movingState, "player-destination");
+        resident.desiredVelocity.multiplyScalar(speed / distance);
+        return;
+      }
+      if (direction && direction.lengthSq() > 0.0025) {
+        const movingState: ResidentState = run ? "run" : "walk";
+        if (resident.state !== movingState) this.transition(resident, movingState, "player-direction");
+        resident.desiredVelocity.copy(direction).setLength(speed);
+        return;
+      }
+      resident.desiredVelocity.set(0, 0, 0);
+      if (resident.state !== "idle") this.transition(resident, "idle", "player-stop");
+      return;
+    }
     if (resident.state !== "walk" && resident.state !== "run") {
       resident.desiredVelocity.set(0, 0, 0);
       return;
@@ -778,10 +866,10 @@ class WorldDirectorImpl implements WorldDirector {
     const chance = 1 - Math.exp(-rate * delta);
     for (let firstIndex = 0; firstIndex < this.residents.length; firstIndex += 1) {
       const first = this.residents[firstIndex]!;
-      if (first.state !== "idle" || first.partner || first.chatCooldown > 0) continue;
+      if (first.control || first.state !== "idle" || first.partner || first.chatCooldown > 0) continue;
       for (let secondIndex = firstIndex + 1; secondIndex < this.residents.length; secondIndex += 1) {
         const second = this.residents[secondIndex]!;
-        if (second.state !== "idle" || second.partner || second.chatCooldown > 0) continue;
+        if (second.control || second.state !== "idle" || second.partner || second.chatCooldown > 0) continue;
         const distanceSquared = first.worldPosition.distanceToSquared(second.worldPosition);
         if (distanceSquared > distanceLimit * distanceLimit || this.random() >= chance) continue;
         this.startConversation(first, second);
@@ -863,6 +951,9 @@ class WorldDirectorImpl implements WorldDirector {
     if (resident.lockY) resident.velocity.y = 0;
     resident.nextPosition.copy(resident.worldPosition).addScaledVector(resident.velocity, delta);
     this.clampToBounds(resident.nextPosition, resident);
+    this.resolveObstacleCollisions(resident.nextPosition, resident);
+    this.resolveResidentCollisions(resident.nextPosition, resident);
+    this.clampToBounds(resident.nextPosition, resident);
     if (resident.lockY) resident.nextPosition.y = resident.home.y;
     const parent = resident.group.parent;
     if (parent) {
@@ -870,6 +961,109 @@ class WorldDirectorImpl implements WorldDirector {
       parent.worldToLocal(resident.nextPosition);
     }
     resident.group.position.copy(resident.nextPosition);
+  }
+
+  private resolveObstacleCollisions(point: THREE.Vector3, resident: ResidentRuntime): void {
+    const obstacles = this.options.obstacles;
+    if (!obstacles?.length) return;
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const obstacle of obstacles) {
+        copyPoint(this.scratchB, obstacle.position, point.y);
+        this.scratchA.copy(point).sub(this.scratchB);
+        this.scratchA.y = 0;
+        const minimumDistance = resident.radius + Math.max(0, obstacle.radius) + 0.035;
+        const distanceSquared = this.scratchA.lengthSq();
+        if (distanceSquared >= minimumDistance * minimumDistance) continue;
+        const distance = Math.sqrt(distanceSquared);
+        if (distance < 0.0001) {
+          const direction = resident.target
+            ? this.scratchA.copy(resident.worldPosition).sub(resident.target).setY(0)
+            : this.scratchA.set(1, 0, 0);
+          if (direction.lengthSq() < 0.0001) direction.set(1, 0, 0);
+          direction.normalize();
+        } else {
+          this.scratchA.multiplyScalar(1 / distance);
+        }
+        point.copy(this.scratchB).addScaledVector(this.scratchA, minimumDistance);
+        const inwardSpeed = resident.velocity.dot(this.scratchA);
+        if (inwardSpeed < 0) resident.velocity.addScaledVector(this.scratchA, -inwardSpeed);
+      }
+    }
+  }
+
+  private resolveResidentCollisions(point: THREE.Vector3, resident: ResidentRuntime): void {
+    for (const other of this.residents) {
+      if (other === resident) continue;
+      this.scratchA.copy(point).sub(other.worldPosition);
+      this.scratchA.y = 0;
+      const minimumDistance = resident.radius + other.radius + 0.045;
+      const distanceSquared = this.scratchA.lengthSq();
+      if (distanceSquared >= minimumDistance * minimumDistance) continue;
+      const distance = Math.sqrt(distanceSquared);
+      if (distance < 0.0001) {
+        const angle = (this.residents.indexOf(resident) * 2.399 + this.residents.indexOf(other) * 1.618) % (Math.PI * 2);
+        this.scratchA.set(Math.cos(angle), 0, Math.sin(angle));
+      } else {
+        this.scratchA.multiplyScalar(1 / distance);
+      }
+      point.copy(other.worldPosition).addScaledVector(this.scratchA, minimumDistance);
+      const inwardSpeed = resident.velocity.dot(this.scratchA);
+      if (inwardSpeed < 0) resident.velocity.addScaledVector(this.scratchA, -inwardSpeed);
+    }
+  }
+
+  /**
+   * The per-resident pass above prevents most contacts. This symmetric final
+   * pass closes the remaining sequential-update gap when two residents move
+   * into one another during the same frame.
+   */
+  private resolveAllResidentCollisions(): void {
+    if (this.residents.length < 2) return;
+    for (let pass = 0; pass < 3; pass += 1) {
+      for (const resident of this.residents) {
+        resident.group.updateWorldMatrix(true, false);
+        resident.group.getWorldPosition(resident.worldPosition);
+      }
+      for (let firstIndex = 0; firstIndex < this.residents.length; firstIndex += 1) {
+        const first = this.residents[firstIndex]!;
+        for (let secondIndex = firstIndex + 1; secondIndex < this.residents.length; secondIndex += 1) {
+          const second = this.residents[secondIndex]!;
+          this.scratchA.copy(first.worldPosition).sub(second.worldPosition).setY(0);
+          const minimumDistance = first.radius + second.radius + 0.045;
+          const distanceSquared = this.scratchA.lengthSq();
+          if (distanceSquared >= minimumDistance * minimumDistance) continue;
+          const distance = Math.sqrt(distanceSquared);
+          if (distance < 0.0001) {
+            const angle = (firstIndex * 2.399 + secondIndex * 1.618) % (Math.PI * 2);
+            this.scratchA.set(Math.cos(angle), 0, Math.sin(angle));
+          } else {
+            this.scratchA.multiplyScalar(1 / distance);
+          }
+          const correction = (minimumDistance - distance) * 0.5 + 0.0005;
+          first.nextPosition.copy(first.worldPosition).addScaledVector(this.scratchA, correction);
+          second.nextPosition.copy(second.worldPosition).addScaledVector(this.scratchA, -correction);
+          this.clampToBounds(first.nextPosition, first);
+          this.clampToBounds(second.nextPosition, second);
+          this.resolveObstacleCollisions(first.nextPosition, first);
+          this.resolveObstacleCollisions(second.nextPosition, second);
+          this.clampToBounds(first.nextPosition, first);
+          this.clampToBounds(second.nextPosition, second);
+          this.applyWorldPosition(first, first.nextPosition);
+          this.applyWorldPosition(second, second.nextPosition);
+        }
+      }
+    }
+  }
+
+  private applyWorldPosition(resident: ResidentRuntime, position: THREE.Vector3): void {
+    this.scratchB.copy(position);
+    if (resident.lockY) this.scratchB.y = resident.home.y;
+    const parent = resident.group.parent;
+    if (parent) {
+      parent.updateWorldMatrix(true, false);
+      parent.worldToLocal(this.scratchB);
+    }
+    resident.group.position.copy(this.scratchB);
   }
 
   private faceResident(resident: ResidentRuntime, delta: number): void {
