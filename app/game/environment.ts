@@ -81,6 +81,8 @@ type TexturePattern =
 
 const sharedMaterials = new Map<string, THREE.Material>();
 const sharedTextures = new Map<TexturePattern, THREE.Texture>();
+const sharedPbrTextures = new Map<string, THREE.Texture>();
+const AUTHORED_TEXTURE_SIZE = { width: 418, height: 627 } as const;
 
 const AUTHORED_TEXTURE_ASSETS: Partial<Record<TexturePattern, string>> = {
   grass: "textures/v2-grass.png",
@@ -88,6 +90,48 @@ const AUTHORED_TEXTURE_ASSETS: Partial<Record<TexturePattern, string>> = {
   stucco: "textures/v2-stucco.png",
   roof: "textures/v2-roof.png",
   paving: "textures/v2-stone.png",
+};
+
+type PbrCompanionKind = "normal" | "roughness" | "ao";
+
+const V4_PBR_ASSETS: Partial<
+  Record<TexturePattern, Partial<Record<PbrCompanionKind, string>>>
+> = {
+  grass: {
+    normal: "textures/v4-grass-normal.png",
+    roughness: "textures/v4-grass-roughness.png",
+    ao: "textures/v4-grass-ao.png",
+  },
+  wood: {
+    normal: "textures/v4-wood-normal.png",
+    roughness: "textures/v4-wood-roughness.png",
+    ao: "textures/v4-wood-ao.png",
+  },
+  stucco: {
+    normal: "textures/v4-stucco-normal.png",
+    roughness: "textures/v4-stucco-roughness.png",
+    ao: "textures/v4-stucco-ao.png",
+  },
+  roof: {
+    normal: "textures/v4-roof-normal.png",
+    roughness: "textures/v4-roof-roughness.png",
+    ao: "textures/v4-roof-ao.png",
+  },
+  road: {
+    normal: "textures/v4-stone-normal.png",
+    roughness: "textures/v4-stone-roughness.png",
+    ao: "textures/v4-stone-ao.png",
+  },
+  paving: {
+    normal: "textures/v4-stone-normal.png",
+    roughness: "textures/v4-stone-roughness.png",
+    ao: "textures/v4-stone-ao.png",
+  },
+  water: {
+    normal: "textures/v4-water-normal.png",
+    roughness: "textures/v4-water-roughness.png",
+    ao: "textures/v4-water-ao.png",
+  },
 };
 
 const PATTERN_REPEAT: Record<TexturePattern, readonly [number, number]> = {
@@ -303,14 +347,17 @@ function surfaceTexture(pattern: TexturePattern): THREE.Texture {
   // decoded. Start from a warm neutral pixel so first-time GitHub visitors see
   // the material colour immediately, then replace it with the authored tile.
   const placeholder = document.createElement("canvas");
-  placeholder.width = 1;
-  placeholder.height = 1;
+  // All authored V2/V4 tiles share this size. Matching the eventual GPU
+  // allocation avoids WebGL2 texSubImage overflow errors on ANGLE when the
+  // asynchronous image replaces the placeholder.
+  placeholder.width = AUTHORED_TEXTURE_SIZE.width;
+  placeholder.height = AUTHORED_TEXTURE_SIZE.height;
   const placeholderContext = placeholder.getContext("2d");
   if (placeholderContext) {
     placeholderContext.fillStyle = "#f4f1e8";
-    placeholderContext.fillRect(0, 0, 1, 1);
+    placeholderContext.fillRect(0, 0, placeholder.width, placeholder.height);
   }
-  const texture = new THREE.TextureLoader().load(
+  const texture: THREE.Texture = new THREE.TextureLoader().load(
     new URL(asset, document.baseURI).href,
     (loaded) => {
       loaded.needsUpdate = true;
@@ -334,6 +381,86 @@ function surfaceTexture(pattern: TexturePattern): THREE.Texture {
   texture.userData.pattern = pattern;
   sharedTextures.set(pattern, texture);
   return texture;
+}
+
+function neutralPbrTexture(kind: PbrCompanionKind): THREE.Texture {
+  const pixel = kind === "normal" ? [128, 128, 255, 255] : kind === "ao" ? [255, 255, 255, 255] : [220, 220, 220, 255];
+  if (typeof document !== "undefined") {
+    const canvas = document.createElement("canvas");
+    canvas.width = AUTHORED_TEXTURE_SIZE.width;
+    canvas.height = AUTHORED_TEXTURE_SIZE.height;
+    const context = canvas.getContext("2d");
+    if (context) {
+      context.fillStyle = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, ${pixel[3] / 255})`;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    return texture;
+  }
+  const texture = new THREE.DataTexture(new Uint8Array(pixel), 1, 1, THREE.RGBAFormat);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/**
+ * Loads V4 tangent detail maps with a deterministic neutral pixel as the
+ * immediate and failure state. A missing optional file can therefore never
+ * turn the scene black or make a material unexpectedly glossy.
+ */
+function pbrTexture(pattern: TexturePattern, kind: PbrCompanionKind): THREE.Texture {
+  const key = `${pattern}:${kind}`;
+  const cached = sharedPbrTextures.get(key);
+  if (cached) return cached;
+
+  const asset = V4_PBR_ASSETS[pattern]?.[kind];
+  const neutral = neutralPbrTexture(kind);
+  if (typeof document === "undefined" || !asset) {
+    neutral.userData.shared = true;
+    neutral.userData.pbrPattern = key;
+    sharedPbrTextures.set(key, neutral);
+    return neutral;
+  }
+
+  const texture: THREE.Texture = new THREE.TextureLoader().load(
+    new URL(asset, document.baseURI).href,
+    (loaded) => {
+      loaded.needsUpdate = true;
+    },
+    undefined,
+    () => {
+      // The neutral texture assigned below is intentionally retained.
+    },
+  );
+  texture.image = neutral.image;
+  texture.needsUpdate = true;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(...PATTERN_REPEAT[pattern]);
+  texture.anisotropy = 4;
+  texture.channel = 0;
+  texture.userData.shared = true;
+  texture.userData.pbrPattern = key;
+  sharedPbrTextures.set(key, texture);
+  return texture;
+}
+
+function pbrCompanions(pattern: TexturePattern): THREE.MeshStandardMaterialParameters {
+  if (!V4_PBR_ASSETS[pattern]) return {};
+  return {
+    normalMap: pbrTexture(pattern, "normal"),
+    normalScale: pattern === "stucco"
+      ? new THREE.Vector2(0.36, 0.36)
+      : pattern === "roof" || pattern === "paving"
+        ? new THREE.Vector2(0.62, 0.62)
+        : new THREE.Vector2(0.46, 0.46),
+    roughnessMap: pbrTexture(pattern, "roughness"),
+    aoMap: pbrTexture(pattern, "ao"),
+    aoMapIntensity: pattern === "stucco" ? 0.42 : 0.58,
+  };
 }
 
 function defaultPatternForSurface(surface: EnvironmentSurface): TexturePattern | undefined {
@@ -393,6 +520,9 @@ function materialKey(
 ): string {
   const emissive = options.emissive ? new THREE.Color(options.emissive).getHexString() : "none";
   const mapName = (options.map?.userData.pattern as string | undefined) ?? "none";
+  const normalName = (options.normalMap?.userData.pbrPattern as string | undefined) ?? "none";
+  const roughnessName = (options.roughnessMap?.userData.pbrPattern as string | undefined) ?? "none";
+  const aoName = (options.aoMap?.userData.pbrPattern as string | undefined) ?? "none";
   return [
     family,
     new THREE.Color(color).getHexString(),
@@ -404,6 +534,9 @@ function materialKey(
     emissive,
     options.side ?? THREE.FrontSide,
     mapName,
+    normalName,
+    roughnessName,
+    aoName,
     options.vertexColors ? 1 : 0,
   ].join(":");
 }
@@ -419,12 +552,17 @@ function toon(
   options: THREE.MeshStandardMaterialParameters = {},
 ): THREE.MeshStandardMaterial {
   const surface = inferSurface(color);
-  const resolvedOptions: THREE.MeshStandardMaterialParameters = {
+  const baseOptions: THREE.MeshStandardMaterialParameters = {
     ...surfaceProperties(surface),
     ...(options.map || !defaultPatternForSurface(surface)
       ? {}
       : { map: surfaceTexture(defaultPatternForSurface(surface) as TexturePattern) }),
     ...options,
+  };
+  const materialPattern = baseOptions.map?.userData.pattern as TexturePattern | undefined;
+  const resolvedOptions: THREE.MeshStandardMaterialParameters = {
+    ...(materialPattern ? pbrCompanions(materialPattern) : {}),
+    ...baseOptions,
   };
   const key = materialKey("standard", color, resolvedOptions);
   const cached = sharedMaterials.get(key);
@@ -482,6 +620,8 @@ function waterMaterial(color: THREE.ColorRepresentation): THREE.MeshPhysicalMate
     emissive: 0x1599c8,
     emissiveIntensity: 0.055,
     map: surfaceTexture("water"),
+    ...pbrCompanions("water"),
+    normalScale: new THREE.Vector2(0.24, 0.24),
   });
   result.userData.shared = true;
   sharedMaterials.set(key, result);
@@ -495,6 +635,11 @@ function addMesh(
   position: readonly [number, number, number] = [0, 0, 0],
   rotation: readonly [number, number, number] = [0, 0, 0],
 ): THREE.Mesh {
+  const uv = geometry.getAttribute("uv");
+  if (uv && !geometry.getAttribute("uv1")) geometry.setAttribute("uv1", uv.clone());
+  // Keep uv2 as a compatibility alias for WebGL renderers predating Three's
+  // uv1 naming while using the same primary repeat coordinates.
+  if (uv && !geometry.getAttribute("uv2")) geometry.setAttribute("uv2", uv.clone());
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(...position);
   mesh.rotation.set(...rotation);
@@ -502,6 +647,63 @@ function addMesh(
   mesh.receiveShadow = false;
   parent.add(mesh);
   return mesh;
+}
+
+function prepareInstancedGeometry<T extends THREE.BufferGeometry>(geometry: T): T {
+  const uv = geometry.getAttribute("uv");
+  if (uv && !geometry.getAttribute("uv1")) geometry.setAttribute("uv1", uv.clone());
+  if (uv && !geometry.getAttribute("uv2")) geometry.setAttribute("uv2", uv.clone());
+  return geometry;
+}
+
+function roundedBoxGeometry(
+  width: number,
+  height: number,
+  depth: number,
+  radius = 0.08,
+): THREE.ExtrudeGeometry {
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+  const corner = Math.min(radius, halfWidth * 0.36, halfHeight * 0.36);
+  const shape = new THREE.Shape();
+  shape.moveTo(-halfWidth + corner, -halfHeight);
+  shape.lineTo(halfWidth - corner, -halfHeight);
+  shape.quadraticCurveTo(halfWidth, -halfHeight, halfWidth, -halfHeight + corner);
+  shape.lineTo(halfWidth, halfHeight - corner);
+  shape.quadraticCurveTo(halfWidth, halfHeight, halfWidth - corner, halfHeight);
+  shape.lineTo(-halfWidth + corner, halfHeight);
+  shape.quadraticCurveTo(-halfWidth, halfHeight, -halfWidth, halfHeight - corner);
+  shape.lineTo(-halfWidth, -halfHeight + corner);
+  shape.quadraticCurveTo(-halfWidth, -halfHeight, -halfWidth + corner, -halfHeight);
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: Math.max(0.01, depth - corner * 0.7),
+    steps: 1,
+    bevelEnabled: true,
+    bevelSegments: 2,
+    bevelSize: corner * 0.34,
+    bevelThickness: corner * 0.34,
+  });
+  geometry.translate(0, 0, -depth / 2 + corner * 0.35);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function roundedBox(
+  parent: THREE.Object3D,
+  size: readonly [number, number, number],
+  color: THREE.ColorRepresentation,
+  position: readonly [number, number, number],
+  rotation: readonly [number, number, number] = [0, 0, 0],
+  radius = 0.08,
+  pattern?: TexturePattern,
+): THREE.Mesh {
+  const material = pattern
+    ? patternedMaterial(color, pattern, { roughness: pattern === "stucco" ? 0.94 : 0.82 })
+    : toon(color);
+  const result = addMesh(parent, roundedBoxGeometry(...size, radius), material, position, rotation);
+  result.castShadow = Math.max(...size) > 0.8;
+  result.receiveShadow = Math.max(...size) > 1.1;
+  return result;
 }
 
 function addEdges(
@@ -749,6 +951,33 @@ function createTiledGableRoof(
   rows.instanceMatrix.needsUpdate = true;
   parent.add(rows);
 
+  // A scalloped eave row catches light independently from the broad roof
+  // plane. This is the small silhouette cue that makes terracotta roofs read
+  // as layered ceramic pieces instead of a single red prism.
+  const eaveCount = Math.max(12, Math.ceil(width / 0.27));
+  const eaveTiles = new THREE.InstancedMesh(
+    prepareInstancedGeometry(new THREE.CylinderGeometry(0.105, 0.115, width / eaveCount + 0.045, 9)),
+    toon(new THREE.Color(roofColor).lerp(new THREE.Color(0xf29165), 0.3).getHex(), {
+      roughness: 0.76,
+      normalMap: pbrTexture("roof", "normal"),
+      roughnessMap: pbrTexture("roof", "roughness"),
+    }),
+    eaveCount * 2,
+  );
+  eaveTiles.name = "Layered terracotta eaves";
+  const eaveRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+  for (let sideIndex = 0; sideIndex < 2; sideIndex += 1) {
+    const z = sideIndex === 0 ? depth / 2 + 0.13 : -depth / 2 - 0.13;
+    for (let tile = 0; tile < eaveCount; tile += 1) {
+      const px = -width / 2 + ((tile + 0.5) / eaveCount) * width;
+      matrix.compose(new THREE.Vector3(px, baseY + 0.035, z), eaveRotation, scale);
+      eaveTiles.setMatrixAt(sideIndex * eaveCount + tile, matrix);
+    }
+  }
+  eaveTiles.instanceMatrix.needsUpdate = true;
+  eaveTiles.castShadow = false;
+  parent.add(eaveTiles);
+
   const frontZ = depth / 2 + 0.11;
   const backZ = -depth / 2 - 0.11;
   for (const z of [frontZ, backZ]) {
@@ -833,6 +1062,120 @@ function addWindow(
   box(parent, [width + 0.32, 0.08, 0.22], COLORS.white, [x, y + height / 2 + 0.13, z + 0.12]);
 }
 
+function archedPanelGeometry(width: number, height: number, segments = 12): THREE.ShapeGeometry {
+  const radius = width / 2;
+  const shoulder = Math.max(height - radius, height * 0.46);
+  const shape = new THREE.Shape();
+  shape.moveTo(-radius, 0);
+  shape.lineTo(radius, 0);
+  shape.lineTo(radius, shoulder);
+  for (let index = 0; index <= segments; index += 1) {
+    const angle = (index / segments) * Math.PI;
+    shape.lineTo(Math.cos(angle) * radius, shoulder + Math.sin(angle) * radius);
+  }
+  shape.lineTo(-radius, 0);
+  shape.closePath();
+  return new THREE.ShapeGeometry(shape, 4);
+}
+
+function addArchedWindow(
+  parent: THREE.Object3D,
+  x: number,
+  y: number,
+  z: number,
+  width = 0.92,
+  height = 1.34,
+  planter = true,
+): void {
+  const baseY = y - height / 2;
+  const recess = addMesh(
+    parent,
+    archedPanelGeometry(width + 0.28, height + 0.22),
+    toon(0x715642, { roughness: 0.82, side: THREE.DoubleSide }),
+    [x, baseY - 0.08, z],
+  );
+  recess.castShadow = false;
+  const warmBacking = addMesh(
+    parent,
+    archedPanelGeometry(width, height),
+    toon(0xffcf88, { emissive: 0xffaa54, emissiveIntensity: 0.12, side: THREE.DoubleSide }),
+    [x, baseY, z + 0.075],
+  );
+  warmBacking.castShadow = false;
+  const glass = addMesh(
+    parent,
+    archedPanelGeometry(width - 0.08, height - 0.08),
+    glassMaterial(0x63b8cf, true),
+    [x, baseY + 0.04, z + 0.12],
+  );
+  glass.castShadow = false;
+  const archRadius = width / 2 + 0.05;
+  const shoulder = baseY + Math.max(height - width / 2, height * 0.46);
+  const archTrim = addMesh(
+    parent,
+    new THREE.TorusGeometry(archRadius, 0.055, 7, 18, Math.PI),
+    toon(COLORS.white, { roughness: 0.76 }),
+    [x, shoulder, z + 0.18],
+  );
+  archTrim.castShadow = false;
+  box(parent, [0.08, height - width / 2, 0.11], COLORS.white, [x - archRadius, baseY + (height - width / 2) / 2, z + 0.18]);
+  box(parent, [0.08, height - width / 2, 0.11], COLORS.white, [x + archRadius, baseY + (height - width / 2) / 2, z + 0.18]);
+  box(parent, [0.06, height - 0.14, 0.1], COLORS.white, [x, baseY + (height - 0.14) / 2, z + 0.2]);
+  box(parent, [width + 0.12, 0.065, 0.1], COLORS.white, [x, baseY + height * 0.46, z + 0.2]);
+  box(parent, [width + 0.38, 0.14, 0.3], 0xa6654c, [x, baseY - 0.1, z + 0.17]);
+  if (planter) createWindowPlanter(parent, x, baseY - 0.26, z + 0.34, width + 0.28);
+}
+
+function createFabricAwning(
+  parent: THREE.Object3D,
+  x: number,
+  y: number,
+  z: number,
+  width: number,
+  color: THREE.ColorRepresentation = 0x4a99ba,
+): void {
+  const segmentCount = Math.max(5, Math.round(width / 0.36));
+  const segmentWidth = width / segmentCount;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const stripe = index % 2 === 0
+      ? new THREE.Color(color).lerp(new THREE.Color(0xe7f6ed), 0.08).getHex()
+      : new THREE.Color(color).lerp(new THREE.Color(0x2d6f91), 0.18).getHex();
+    const offsetX = -width / 2 + segmentWidth / 2 + index * segmentWidth;
+    const canopy = roundedBox(
+      parent,
+      [segmentWidth + 0.025, 0.09, 1.02],
+      stripe,
+      [x + offsetX, y, z + 0.39],
+      [-0.2, 0, 0],
+      0.035,
+      "fabric",
+    );
+    canopy.castShadow = false;
+    const scallop = sphere(parent, segmentWidth * 0.5, stripe, [x + offsetX, y - 0.12, z + 0.91], [1, 0.58, 0.55]);
+    scallop.material = patternedMaterial(stripe, "fabric", { roughness: 0.94 });
+    scallop.castShadow = false;
+  }
+  box(parent, [width + 0.16, 0.1, 0.12], 0x735039, [x, y + 0.08, z - 0.08]);
+}
+
+function createFlowerBalcony(
+  parent: THREE.Object3D,
+  x: number,
+  y: number,
+  z: number,
+  width = 2.7,
+): void {
+  const timber = 0x765039;
+  const deck = roundedBox(parent, [width, 0.18, 0.72], 0x996344, [x, y, z], [0, 0, 0], 0.06, "wood");
+  deck.castShadow = true;
+  for (const offsetX of [-width / 2 + 0.1, -width / 4, 0, width / 4, width / 2 - 0.1]) {
+    cylinder(parent, 0.035, 0.045, 0.65, 7, timber, [x + offsetX, y + 0.36, z + 0.31]);
+  }
+  box(parent, [width, 0.08, 0.08], timber, [x, y + 0.69, z + 0.31]);
+  createWindowPlanter(parent, x - width * 0.25, y + 0.18, z + 0.43, width * 0.43);
+  createWindowPlanter(parent, x + width * 0.25, y + 0.18, z + 0.43, width * 0.43);
+}
+
 function addDoor(
   parent: THREE.Object3D,
   x: number,
@@ -840,8 +1183,8 @@ function addDoor(
   z: number,
   color: THREE.ColorRepresentation,
 ): void {
-  box(parent, [1.16, 2.55, 0.18], COLORS.white, [x, y, z]);
-  box(parent, [0.94, 2.33, 0.13], color, [x, y, z + 0.12]);
+  roundedBox(parent, [1.16, 2.55, 0.18], COLORS.white, [x, y, z], [0, 0, 0], 0.12);
+  roundedBox(parent, [0.94, 2.33, 0.13], color, [x, y, z + 0.12], [0, 0, 0], 0.1, "wood");
   // Four recessed panels break up the tall slab and better establish scale.
   for (const panelY of [y - 0.57, y + 0.54]) {
     box(parent, [0.66, 0.72, 0.035], 0x6c5948, [x, panelY, z + 0.2]);
@@ -862,18 +1205,18 @@ function createHouse(
   const house = new THREE.Group();
   house.position.set(x, 0, z);
   house.rotation.y = yaw;
-  house.scale.setScalar(scale);
+  // A broad, slightly lower silhouette reads as a believable two-storey home
+  // beside the residents instead of a narrow toy tower.
+  house.scale.set(scale * 1.14, scale * 0.9, scale * 1.04);
   parent.add(house);
 
   const wallColor = new THREE.Color(bodyColor).lerp(new THREE.Color(0xfff4df), 0.84).getHex();
   const tileColor = new THREE.Color(roofColor).lerp(new THREE.Color(0xd9694e), 0.82).getHex();
-  const foundation = box(house, [4.24, 0.62, 3.18], 0xb9b5aa, [0, 0.3, 0]);
-  foundation.material = patternedMaterial(0xb9b5aa, "paving", { roughness: 0.98 });
+  const foundation = roundedBox(house, [4.24, 0.62, 3.18], 0xb9b5aa, [0, 0.3, 0], [0, 0, 0], 0.11, "paving");
   foundation.receiveShadow = true;
   addStoneFoundationFace(house, 4.06, 1.635, 0.33);
 
-  const body = box(house, [4.06, 6.22, 3.02], wallColor, [0, 3.42, 0]);
-  body.material = patternedMaterial(wallColor, "stucco", { roughness: 0.94 });
+  const body = roundedBox(house, [4.06, 6.22, 3.02], wallColor, [0, 3.42, 0], [0, 0, 0], 0.09, "stucco");
   addEdges(body, 0x8d745e, 0.065, 44);
 
   const frontZ = 1.57;
@@ -890,13 +1233,12 @@ function createHouse(
 
   createTiledGableRoof(house, 4.72, 3.62, 2.82, 6.48, tileColor, wallColor);
 
-  addDoor(house, 0, 1.51, 1.62, tileColor);
+  addDoor(house, 0, 1.51, 1.62, 0x3e7f78);
   addWindow(house, -1.28, 2.12, 1.6, 0.76, 1.05);
   addWindow(house, 1.28, 2.12, 1.6, 0.76, 1.05);
-  addWindow(house, -1.1, 5.08, 1.6, 0.86, 1.12);
-  addWindow(house, 1.1, 5.08, 1.6, 0.86, 1.12);
-  createWindowPlanter(house, -1.1, 4.28, 1.82, 1.15);
-  createWindowPlanter(house, 1.1, 4.28, 1.82, 1.15);
+  addArchedWindow(house, -1.1, 5.08, 1.6, 0.9, 1.3, false);
+  addArchedWindow(house, 1.1, 5.08, 1.6, 0.9, 1.3, false);
+  createFlowerBalcony(house, 0, 3.83, 1.93, 2.75);
 
   const sideFacade = new THREE.Group();
   sideFacade.position.x = 2.04;
@@ -905,8 +1247,7 @@ function createHouse(
   addWindow(sideFacade, 0.25, 4.72, 0, 0.82, 1.04);
 
   // A tiled porch, substantial posts and a stone step establish human scale.
-  const porchRoof = box(house, [1.76, 0.18, 0.96], tileColor, [0, 2.98, 1.98], [-0.08, 0, 0]);
-  porchRoof.material = patternedMaterial(tileColor, "roof", { roughness: 0.8 });
+  createFabricAwning(house, 0, 3.06, 1.63, 1.78, 0x438faf);
   for (const postX of [-0.75, 0.75]) {
     box(house, [0.11, 2.48, 0.11], timber, [postX, 1.64, 2.22]);
   }
@@ -916,7 +1257,7 @@ function createHouse(
   box(house, [0.6, 0.2, 0.6], 0x754737, [1.3, 8.77, -0.45]);
 
   house.userData.kind = "house";
-  house.userData.height = 9.35 * scale;
+  house.userData.height = 9.35 * scale * 0.9;
   return house;
 }
 
@@ -960,12 +1301,10 @@ function createCafe(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   const wallColor = 0xfff0d7;
   const tileColor = 0xd66c50;
   const timber = 0x765039;
-  const cafeFoundation = box(cafe, [5.62, 0.62, 3.78], 0xb9b6ad, [0, 0.3, 0]);
-  cafeFoundation.material = patternedMaterial(0xb9b6ad, "paving", { roughness: 0.98 });
+  const cafeFoundation = roundedBox(cafe, [5.62, 0.62, 3.78], 0xb9b6ad, [0, 0.3, 0], [0, 0, 0], 0.11, "paving");
   cafeFoundation.receiveShadow = true;
   addStoneFoundationFace(cafe, 5.38, 1.94, 0.33);
-  const cafeBody = box(cafe, [5.4, 6.06, 3.55], wallColor, [0, 3.34, 0]);
-  cafeBody.material = patternedMaterial(wallColor, "stucco", { roughness: 0.94 });
+  const cafeBody = roundedBox(cafe, [5.4, 6.06, 3.55], wallColor, [0, 3.34, 0], [0, 0, 0], 0.09, "stucco");
   addEdges(cafeBody, 0x8b725d, 0.065, 44);
 
   const frontZ = 1.83;
@@ -1045,12 +1384,10 @@ function createShop(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   const wallColor = 0xfff2d9;
   const tileColor = 0xce664e;
   const timber = 0x785039;
-  const shopFoundation = box(shop, [5.12, 0.62, 3.58], 0xb8b5ac, [0, 0.3, 0]);
-  shopFoundation.material = patternedMaterial(0xb8b5ac, "paving", { roughness: 0.98 });
+  const shopFoundation = roundedBox(shop, [5.12, 0.62, 3.58], 0xb8b5ac, [0, 0.3, 0], [0, 0, 0], 0.11, "paving");
   shopFoundation.receiveShadow = true;
   addStoneFoundationFace(shop, 4.9, 1.84, 0.33);
-  const shopBody = box(shop, [4.9, 5.94, 3.36], wallColor, [0, 3.28, 0]);
-  shopBody.material = patternedMaterial(wallColor, "stucco", { roughness: 0.94 });
+  const shopBody = roundedBox(shop, [4.9, 5.94, 3.36], wallColor, [0, 3.28, 0], [0, 0, 0], 0.09, "stucco");
   addEdges(shopBody, 0x8c735e, 0.065, 44);
   const frontZ = 1.73;
   for (const corner of [-1, 1]) {
@@ -1073,6 +1410,7 @@ function createShop(parent: THREE.Object3D, x: number, z: number): THREE.Group {
       false,
     );
   }
+  createFabricAwning(shop, -0.78, 3.03, 1.74, 2.95, 0x498eae);
 
   addStorefrontWindow(shop, -0.78, 1.88, 1.72, 2.65, 1.76, 2);
   addDoor(shop, 1.5, 1.51, 1.74, 0x5d8f78);
@@ -1137,10 +1475,10 @@ function createTree(
   const crownData: ReadonlyArray<
     readonly [number, number, number, number, number, number, number, THREE.ColorRepresentation]
   > = [
-    [-0.46, 0.92, 0.02, 0.92, 1.04, 0.96, 0.94, COLORS.leaf],
-    [0.48, 0.9, -0.08, 0.9, 1.02, 0.98, 0.94, COLORS.leafLight],
-    [0, 1.5, -0.02, 0.94, 1.02, 1, 0.96, 0x83d36d],
-    [0.02, 0.76, 0.48, 0.74, 1.08, 0.9, 0.86, COLORS.leafDark],
+    [-0.46, 0.92, 0.02, 0.76, 1.04, 0.96, 0.94, COLORS.leaf],
+    [0.48, 0.9, -0.08, 0.74, 1.02, 0.98, 0.94, COLORS.leafLight],
+    [0, 1.5, -0.02, 0.78, 1.02, 1, 0.96, 0x83d36d],
+    [0.02, 0.76, 0.48, 0.62, 1.08, 0.9, 0.86, COLORS.leafDark],
   ];
   crownData.forEach(([cx, cy, cz, radius, sx, sy, sz, color], index) => {
     const leaves = addMesh(
@@ -1157,10 +1495,10 @@ function createTree(
 
   // Fine leaf puffs are instanced: the crown gains a hand-pruned silhouette
   // and small-scale detail for one draw call instead of dozens of meshes.
-  const leafCount = 26;
+  const leafCount = 112;
   const leafPuffs = new THREE.InstancedMesh(
-    new THREE.IcosahedronGeometry(0.14, 1),
-    toon(0x68bf62, {
+    prepareInstancedGeometry(new THREE.DodecahedronGeometry(0.105, 0)),
+    toon(0xffffff, {
       roughness: 0.82,
     }),
     leafCount,
@@ -1171,22 +1509,33 @@ function createTree(
   const leafMatrix = new THREE.Matrix4();
   const leafRotation = new THREE.Quaternion();
   const leafScale = new THREE.Vector3();
+  const leafPalette = [0x3e8f4d, 0x51a457, 0x66b85f, 0x7bc669];
+  const lobeCenters = [
+    new THREE.Vector3(-0.5, 1.1, 0.04),
+    new THREE.Vector3(0.5, 1.06, -0.08),
+    new THREE.Vector3(0, 1.63, -0.03),
+    new THREE.Vector3(0.02, 0.86, 0.47),
+  ];
   for (let index = 0; index < leafCount; index += 1) {
-    const vertical = 1 - (2 * (index + 0.5)) / leafCount;
+    const lobe = lobeCenters[index % lobeCenters.length];
+    const ringIndex = Math.floor(index / lobeCenters.length);
+    const vertical = 1 - (2 * (ringIndex + 0.5)) / Math.ceil(leafCount / lobeCenters.length);
     const radial = Math.sqrt(Math.max(0, 1 - vertical * vertical));
-    const angle = index * 2.399963 + phase;
+    const angle = ringIndex * 2.399963 + index * 0.43 + phase;
     const position = new THREE.Vector3(
-      Math.cos(angle) * radial * 1.16,
-      1.15 + vertical * 1.02,
-      0.08 + Math.sin(angle) * radial * 0.96,
+      lobe.x + Math.cos(angle) * radial * 0.72,
+      lobe.y + vertical * 0.66,
+      lobe.z + Math.sin(angle) * radial * 0.6,
     );
     leafRotation.setFromEuler(new THREE.Euler(angle * 0.2, angle, vertical * 0.18));
-    const variation = 0.82 + (index % 5) * 0.055;
-    leafScale.set(variation * 1.16, variation * 0.78, variation * 0.94);
+    const variation = 0.8 + (index % 7) * 0.04;
+    leafScale.set(variation * 1.12, variation * 0.68, variation);
     leafMatrix.compose(position, leafRotation, leafScale);
     leafPuffs.setMatrixAt(index, leafMatrix);
+    leafPuffs.setColorAt(index, new THREE.Color(leafPalette[(index + Math.floor(phase * 3)) % leafPalette.length]));
   }
   leafPuffs.instanceMatrix.needsUpdate = true;
+  if (leafPuffs.instanceColor) leafPuffs.instanceColor.needsUpdate = true;
   root.add(leafPuffs);
   crowns.push({ group: root, phase });
   return tree;
@@ -1218,6 +1567,37 @@ function createBush(
     leaves.scale.set(scale * 1.05, scale * 0.76, scale * 0.9);
     leaves.castShadow = index < 2;
   });
+
+  const detailCount = 18;
+  const detail = new THREE.InstancedMesh(
+    prepareInstancedGeometry(new THREE.DodecahedronGeometry(0.13, 0)),
+    toon(0xffffff, { roughness: 0.86 }),
+    detailCount,
+  );
+  const matrix = new THREE.Matrix4();
+  const rotation = new THREE.Quaternion();
+  const detailScale = new THREE.Vector3();
+  const palette = [0x347c45, 0x47954d, 0x5eac55, 0x78be61, 0x8dcc70];
+  for (let index = 0; index < detailCount; index += 1) {
+    const angle = index * 2.399963;
+    const heightBand = (index % 5) / 5;
+    const radius = (0.46 + (index % 4) * 0.08) * scale;
+    const position = new THREE.Vector3(
+      Math.cos(angle) * radius,
+      (0.42 + heightBand * 0.55) * scale,
+      Math.sin(angle) * radius * 0.66,
+    );
+    rotation.setFromEuler(new THREE.Euler(index * 0.14, angle, index * -0.08));
+    const variation = scale * (0.78 + (index % 3) * 0.11);
+    detailScale.set(variation * 1.1, variation * 0.78, variation);
+    matrix.compose(position, rotation, detailScale);
+    detail.setMatrixAt(index, matrix);
+    detail.setColorAt(index, new THREE.Color(palette[index % palette.length]));
+  }
+  detail.instanceMatrix.needsUpdate = true;
+  if (detail.instanceColor) detail.instanceColor.needsUpdate = true;
+  detail.castShadow = false;
+  bush.add(detail);
 }
 
 function createFlowerPatch(
@@ -1326,19 +1706,43 @@ function createLamp(parent: THREE.Object3D, x: number, z: number): THREE.Group {
   const lamp = new THREE.Group();
   lamp.position.set(x, 0, z);
   parent.add(lamp);
-  cylinder(lamp, 0.2, 0.28, 0.2, 8, 0x44565d, [0, 0.1, 0]);
-  cylinder(lamp, 0.065, 0.09, 2.75, 8, 0x44565d, [0, 1.54, 0]);
-  box(lamp, [0.65, 0.09, 0.1], 0x44565d, [0.22, 2.88, 0], [0, 0, -0.06], false);
-  const shade = cylinder(lamp, 0.42, 0.25, 0.33, 8, 0x3d5057, [0.48, 2.7, 0]);
-  shade.rotation.z = Math.PI;
-  sphere(
+  cylinder(lamp, 0.22, 0.31, 0.22, 10, 0x3c4a4e, [0, 0.11, 0]);
+  cylinder(lamp, 0.12, 0.18, 0.2, 10, 0x536064, [0, 0.3, 0]);
+  cylinder(lamp, 0.055, 0.09, 2.8, 10, 0x3c4a4e, [0, 1.75, 0]);
+  cylinder(lamp, 0.105, 0.105, 0.13, 10, 0x536064, [0, 2.55, 0]);
+  const arm = addMesh(
     lamp,
-    0.25,
-    0xffe69b,
-    [0.48, 2.48, 0],
-    [0.92, 1.08, 0.92],
-    false,
-  ).material = glassMaterial(0xffdf84, true);
+    new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(0, 2.88, 0),
+        new THREE.Vector3(0.2, 3.2, 0),
+        new THREE.Vector3(0.58, 3.3, 0),
+        new THREE.Vector3(0.82, 3.02, 0),
+      ]),
+      14,
+      0.052,
+      8,
+      false,
+    ),
+    toon(0x3c4a4e, { roughness: 0.38, metalness: 0.45 }),
+  );
+  arm.castShadow = false;
+  cylinder(lamp, 0.035, 0.035, 0.25, 8, 0x3c4a4e, [0.82, 2.94, 0]);
+
+  const lantern = new THREE.Group();
+  lantern.position.set(0.82, 2.56, 0);
+  lamp.add(lantern);
+  const glass = cylinder(lantern, 0.23, 0.23, 0.52, 6, 0xffe29a, [0, 0, 0]);
+  glass.material = glassMaterial(0xffd679, true);
+  glass.castShadow = false;
+  for (let index = 0; index < 6; index += 1) {
+    const angle = (index / 6) * Math.PI * 2;
+    cylinder(lantern, 0.018, 0.024, 0.58, 5, 0x354449, [Math.cos(angle) * 0.23, 0, Math.sin(angle) * 0.23]);
+  }
+  cylinder(lantern, 0.28, 0.28, 0.07, 10, 0x354449, [0, -0.31, 0]);
+  const hood = cylinder(lantern, 0.09, 0.36, 0.28, 8, 0x354449, [0, 0.4, 0]);
+  hood.castShadow = false;
+  sphere(lantern, 0.07, COLORS.gold, [0, 0.59, 0], [0.85, 1.25, 0.85]).castShadow = false;
   return lamp;
 }
 
@@ -1444,6 +1848,50 @@ function createRoadNetwork(parent: THREE.Object3D): void {
     path.material = patternedMaterial(0xeee6d5, "paving", { roughness: 1 });
     path.receiveShadow = true;
   }
+
+  // Individual, softly irregular foreground setts break the hero courtyard
+  // into readable stones. The geometry is instanced so the close-up gains
+  // depth and contact shadows without turning the entire road into hundreds
+  // of draw calls.
+  const cobbleGeometry = prepareInstancedGeometry(new THREE.CylinderGeometry(0.28, 0.31, 0.026, 12));
+  const cobbles = new THREE.InstancedMesh(
+    cobbleGeometry,
+    toon(0xffffff, {
+      map: surfaceTexture("paving"),
+      roughness: 0.98,
+      normalMap: pbrTexture("paving", "normal"),
+      roughnessMap: pbrTexture("paving", "roughness"),
+      aoMap: pbrTexture("paving", "ao"),
+      aoMapIntensity: 0.62,
+    }),
+    198,
+  );
+  cobbles.name = "Hero courtyard stone setts";
+  cobbles.castShadow = false;
+  cobbles.receiveShadow = true;
+  const cobbleMatrix = new THREE.Matrix4();
+  const cobbleRotation = new THREE.Quaternion();
+  const cobbleScale = new THREE.Vector3();
+  const cobblePalette = [0xe1d8c8, 0xc9c2b6, 0xeee4d2, 0xbebcb4, 0xd5cbbb];
+  let cobbleIndex = 0;
+  for (let row = 0; row < 11; row += 1) {
+    for (let column = 0; column < 18; column += 1) {
+      const stagger = row % 2 === 0 ? 0 : 0.23;
+      const x = -9.15 + column * 0.48 + stagger + Math.sin((row + 1) * (column + 2)) * 0.032;
+      const z = 5.95 + row * 0.5 + Math.cos(column * 1.71 + row) * 0.03;
+      const ellipseDistance = Math.hypot((x + 5.25) / 4.55, (z - 8.55) / 3.25);
+      cobbleRotation.setFromEuler(new THREE.Euler(0, (column * 0.31 + row * 0.43) % Math.PI, 0));
+      const variation = 0.86 + ((row * 13 + column * 7) % 9) * 0.022;
+      cobbleScale.set(variation * (ellipseDistance > 1 ? 0.78 : 1), 1, variation * (0.78 + (column % 3) * 0.06));
+      cobbleMatrix.compose(new THREE.Vector3(x, 0.082, z), cobbleRotation, cobbleScale);
+      cobbles.setMatrixAt(cobbleIndex, cobbleMatrix);
+      cobbles.setColorAt(cobbleIndex, new THREE.Color(cobblePalette[(row + column) % cobblePalette.length]));
+      cobbleIndex += 1;
+    }
+  }
+  cobbles.instanceMatrix.needsUpdate = true;
+  if (cobbles.instanceColor) cobbles.instanceColor.needsUpdate = true;
+  parent.add(cobbles);
 }
 
 function createPlaza(parent: THREE.Object3D, droplets: JetDrop[]): void {
@@ -1464,9 +1912,12 @@ function createPlaza(parent: THREE.Object3D, droplets: JetDrop[]): void {
   createFountain(parent, -7.7, -5.2, droplets);
 }
 
-function createParkPond(parent: THREE.Object3D): void {
+function createParkPond(parent: THREE.Object3D): THREE.Group {
+  const park = new THREE.Group();
+  park.name = "Lily pond garden";
+  parent.add(park);
   const pond = addMesh(
-    parent,
+    park,
     new THREE.CylinderGeometry(2.7, 2.95, 0.18, 28),
     waterMaterial(0x63d5f0),
     [-8.5, 0.17, 10.2],
@@ -1476,12 +1927,12 @@ function createParkPond(parent: THREE.Object3D): void {
   for (const angle of [0.3, 1.35, 2.5, 3.7, 5.1]) {
     const x = -8.5 + Math.cos(angle) * 2.65;
     const z = 10.2 + Math.sin(angle) * 1.75;
-    cylinder(parent, 0.24, 0.28, 0.12, 10, 0x5eae5c, [x, 0.34, z], false);
-    sphere(parent, 0.09, 0xff8ba5, [x, 0.46, z], [1, 0.45, 1]);
+    cylinder(park, 0.24, 0.28, 0.12, 10, 0x5eae5c, [x, 0.34, z], false);
+    sphere(park, 0.09, 0xff8ba5, [x, 0.46, z], [1, 0.45, 1]);
   }
   const bridge = new THREE.Group();
   bridge.position.set(-8.5, 0.42, 10.2);
-  parent.add(bridge);
+  park.add(bridge);
   for (let plank = -5; plank <= 5; plank += 1) {
     const y = 0.08 + Math.cos((plank / 5) * Math.PI / 2) * 0.35;
     box(bridge, [0.43, 0.14, 1.65], 0xb7754d, [plank * 0.4, y, 0]);
@@ -1492,6 +1943,7 @@ function createParkPond(parent: THREE.Object3D): void {
     }
     box(bridge, [4.3, 0.08, 0.08], COLORS.darkWood, [0, 0.9, side * 0.76], [0, 0, 0], false);
   }
+  return park;
 }
 
 function canalShape(widthOffset = 0): THREE.Shape {
@@ -1537,7 +1989,7 @@ function createCanal(parent: THREE.Object3D): THREE.Mesh {
   // while keeping the full river edge to one draw call.
   const stoneCount = 46;
   const stones = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(0.3, 10, 6),
+    prepareInstancedGeometry(new THREE.SphereGeometry(0.3, 10, 6)),
     toon(0xffffff, {
       map: surfaceTexture("paving"),
       roughness: 1,
@@ -1630,7 +2082,7 @@ function createCanal(parent: THREE.Object3D): THREE.Mesh {
   parent.add(boardwalk);
   const plankCount = 15;
   const planks = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(0.43, 0.12, 2.45),
+    prepareInstancedGeometry(new THREE.BoxGeometry(0.43, 0.12, 2.45)),
     patternedMaterial(0xa96e48, "wood", { roughness: 0.8 }),
     plankCount,
   );
@@ -2391,7 +2843,10 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   const canalWater = createCanal(group);
   createRoadNetwork(group);
   createPlaza(group, droplets);
-  createParkPond(group);
+  const parkPond = createParkPond(group);
+  // The opening portrait is a clean residential courtyard. The pond remains
+  // available in the plaza/cafe explorations without obscuring the hero cast.
+  parkPond.visible = sceneName !== "home";
   createGrassDetails(group);
 
   createHouse(group, -9.8, 3.1, 0xf4d8cb, 0xb95455, 0.04, 1.08);
@@ -2413,7 +2868,7 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   createTownSign(group, -2.85, 6.25);
 
   const treeData: ReadonlyArray<readonly [number, number, number, number]> = [
-    [-13.5, 10.5, 0.96, 0.2],
+    [-13.2, 8.6, 1.08, 0.2],
     [15, -15, 0.88, 1.3],
     [-15.5, 12.7, 0.82, 2.4],
     [18, -12.5, 0.85, 3.1],
@@ -2451,7 +2906,9 @@ export function createTown(sceneName: TownSceneName): TownEnvironment {
   benches.push(createBench(group, -4.2, -4.4, -Math.PI / 2));
   benches.push(createBench(group, -8.1, 0.4, Math.PI));
   benches.push(createBench(group, -12.1, -5.2, Math.PI / 2));
-  benches.push(createBench(group, -5.2, 10.7, Math.PI / 2));
+  const courtyardBench = createBench(group, -5.2, 10.7, Math.PI / 2);
+  courtyardBench.visible = sceneName !== "home";
+  benches.push(courtyardBench);
   benches.push(createBench(group, -11.2, 8.2, -Math.PI / 2));
 
   const lampPositions: ReadonlyArray<readonly [number, number]> = [

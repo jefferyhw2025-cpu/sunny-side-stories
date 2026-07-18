@@ -32,9 +32,9 @@ type Person = {
 type StyleOption = { value: number; label: string; glyph: string };
 
 const starterPeople: Person[] = [
-  { id: 1, name: "小满", color: "#ffcc9c", hair: "#56331f", shirt: "#ef735f", hairStyle: 4, faceShape: 1, eyeStyle: 3, browStyle: 2, noseStyle: 0, mouthStyle: 2, outfitStyle: 5, mood: 82, food: 61, energy: 74, friend: 45, trait: "天马行空", dream: "在广场举办一场演唱会" },
-  { id: 2, name: "阿奇", color: "#9b623f", hair: "#1d1714", shirt: "#e3ad3f", hairStyle: 8, faceShape: 2, eyeStyle: 0, browStyle: 5, noseStyle: 3, mouthStyle: 4, outfitStyle: 2, mood: 66, food: 78, energy: 48, friend: 45, trait: "热情冒险", dream: "做出全城最好吃的蛋包饭" },
-  { id: 3, name: "露露", color: "#f1b88f", hair: "#e85e69", shirt: "#54a98e", hairStyle: 1, faceShape: 0, eyeStyle: 7, browStyle: 1, noseStyle: 6, mouthStyle: 0, outfitStyle: 3, mood: 74, food: 52, energy: 88, friend: 32, trait: "温柔细腻", dream: "交到三个真正的好朋友" },
+  { id: 1, name: "小满", color: "#efb18e", hair: "#70422d", shirt: "#e3ad3f", hairStyle: 6, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 82, food: 61, energy: 74, friend: 45, trait: "天马行空", dream: "在广场举办一场演唱会" },
+  { id: 2, name: "阿奇", color: "#efb18e", hair: "#201b19", shirt: "#54a98e", hairStyle: 8, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 66, food: 78, energy: 48, friend: 45, trait: "热情冒险", dream: "做出全城最好吃的蛋包饭" },
+  { id: 3, name: "露露", color: "#ffd0a6", hair: "#e1b84b", shirt: "#7ca9d6", hairStyle: 1, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 3, mood: 74, food: 52, energy: 88, friend: 32, trait: "温柔细腻", dream: "交到三个真正的好朋友" },
 ];
 
 const scenes = [

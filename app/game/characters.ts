@@ -33,32 +33,32 @@ export interface CharacterProfile {
 
 export interface CharacterJoints {
   /** Internal motion root. Move the returned `group` to place the character. */
-  root: THREE.Group;
-  hips: THREE.Group;
-  torso: THREE.Group;
-  chest: THREE.Group;
-  neck: THREE.Group;
-  head: THREE.Group;
-  leftShoulder: THREE.Group;
-  rightShoulder: THREE.Group;
-  leftArm: THREE.Group;
-  rightArm: THREE.Group;
+  root: THREE.Bone;
+  hips: THREE.Bone;
+  torso: THREE.Bone;
+  chest: THREE.Bone;
+  neck: THREE.Bone;
+  head: THREE.Bone;
+  leftShoulder: THREE.Bone;
+  rightShoulder: THREE.Bone;
+  leftArm: THREE.Bone;
+  rightArm: THREE.Bone;
   /** Director-friendly aliases of leftArm/rightArm. */
-  armL: THREE.Group;
-  armR: THREE.Group;
-  leftForearm: THREE.Group;
-  rightForearm: THREE.Group;
-  leftHand: THREE.Group;
-  rightHand: THREE.Group;
-  leftLeg: THREE.Group;
-  rightLeg: THREE.Group;
+  armL: THREE.Bone;
+  armR: THREE.Bone;
+  leftForearm: THREE.Bone;
+  rightForearm: THREE.Bone;
+  leftHand: THREE.Bone;
+  rightHand: THREE.Bone;
+  leftLeg: THREE.Bone;
+  rightLeg: THREE.Bone;
   /** Director-friendly aliases of leftLeg/rightLeg. */
-  legL: THREE.Group;
-  legR: THREE.Group;
-  leftShin: THREE.Group;
-  rightShin: THREE.Group;
-  leftFoot: THREE.Group;
-  rightFoot: THREE.Group;
+  legL: THREE.Bone;
+  legR: THREE.Bone;
+  leftShin: THREE.Bone;
+  rightShin: THREE.Bone;
+  leftFoot: THREE.Bone;
+  rightFoot: THREE.Bone;
   leftEye: THREE.Group;
   rightEye: THREE.Group;
   eyes: THREE.Group;
@@ -75,6 +75,8 @@ interface CharacterAnimation {
 export interface Character {
   group: THREE.Group;
   joints: CharacterJoints;
+  /** Real transform skeleton; geometry is parented to its corresponding bones. */
+  skeleton: THREE.Skeleton;
   profile: CharacterProfile;
   animation: CharacterAnimation;
 }
@@ -213,22 +215,22 @@ function material(
     case "skin":
       result = new THREE.MeshPhysicalMaterial({
         ...base,
-        roughness: 0.71,
-        clearcoat: 0.018,
-        clearcoatRoughness: 0.9,
-        sheen: 0.045,
+        roughness: 0.82,
+        clearcoat: 0,
+        clearcoatRoughness: 1,
+        sheen: 0.025,
         sheenColor: resolvedColor,
-        sheenRoughness: 0.94,
+        sheenRoughness: 1,
       });
       break;
     case "fabric":
       result = new THREE.MeshPhysicalMaterial({
         ...base,
-        roughness: 0.94,
+        roughness: 0.98,
         clearcoat: 0,
-        sheen: 0.2,
+        sheen: 0.1,
         sheenColor: resolvedColor.clone().offsetHSL(0, 0, 0.08),
-        sheenRoughness: 0.86,
+        sheenRoughness: 0.94,
       });
       break;
     case "leather":
@@ -248,7 +250,7 @@ function material(
       });
       break;
     case "hair":
-      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.46 });
+      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.64 });
       break;
     case "detail":
     default:
@@ -285,6 +287,20 @@ function joint(parent: THREE.Object3D, x: number, y: number, z: number): THREE.G
   return result;
 }
 
+function boneJoint(
+  parent: THREE.Object3D,
+  name: string,
+  x: number,
+  y: number,
+  z: number,
+): THREE.Bone {
+  const bone = new THREE.Bone();
+  bone.name = name;
+  bone.position.set(x, y, z);
+  parent.add(bone);
+  return bone;
+}
+
 function createEye(
   parent: THREE.Object3D,
   x: number,
@@ -295,7 +311,7 @@ function createEye(
   const eye = joint(parent, x, 0.285, 0.535 + FRONT);
   const dark = material("#243044", { surface: "eye" });
   const white = material("#fffdf7", { surface: "eye" });
-  const iris = material("#527d8e", { surface: "eye" });
+  const iris = material("#755842", { surface: "eye" });
   const highlight = material("#ffffff", { surface: "eye" });
 
   const circle = (radius: number, segments = 24) => cachedGeometry(
@@ -315,7 +331,13 @@ function createEye(
     }
   };
 
-  if (includesAny(resolved, ["sleep", "closed", "calm", "happy"])) {
+  if (resolved === "classic") {
+    // The default face follows the accepted key art: a simple dark oval with
+    // tiny painted highlights, not a wide white toy-doll sclera.
+    addMesh(eye, circle(0.078, 24), dark, [0, 0, 0], [0.74, 1.18, 1]);
+    addMesh(eye, circle(0.016, 14), highlight, [-0.016, 0.027, 0.014]);
+    addMesh(eye, circle(0.006, 10), highlight, [0.018, -0.022, 0.016]);
+  } else if (includesAny(resolved, ["sleep", "closed", "calm", "happy"])) {
     const arc = addMesh(
       eye,
       cachedGeometry("eye-closed-arc", () => new THREE.TorusGeometry(0.085, 0.014, 7, 24, Math.PI)),
@@ -335,20 +357,33 @@ function createEye(
     const almond = includesAny(resolved, ["almond", "cat", "focused", "downturned"]);
     const eyeScaleX = almond ? 1.22 : wide ? 0.98 : 0.88;
     const eyeScaleY = almond ? 0.68 : wide ? 1.08 : 0.92;
+    const scleraRadius = wide ? 0.112 : 0.103;
     addMesh(
       eye,
-      circle(wide ? 0.11 : 0.1),
+      cachedGeometry(`eye-sclera:${wide ? "wide" : "classic"}`, () => new THREE.SphereGeometry(scleraRadius, 24, 16)),
       white,
-      [0, 0, 0],
-      [eyeScaleX, eyeScaleY, 1],
+      [0, 0, -0.002],
+      [eyeScaleX, eyeScaleY, 0.24],
       [0, 0, resolved === "downturned" ? (x < 0 ? -7 : 7) * DEG : resolved === "cat" ? (x < 0 ? 6 : -6) * DEG : 0],
     );
-    const irisRadius = wide ? 0.066 : 0.058;
-    addMesh(eye, circle(irisRadius, 22), iris, [0, resolved === "kind" ? -0.012 : -0.004, 0.012]);
-    addMesh(eye, circle(0.031, 20), dark, [0, -0.006, 0.023]);
-    addMesh(eye, circle(resolved === "sparkle" ? 0.016 : 0.012, 14), highlight, [-0.016, 0.02, 0.034]);
+    const irisRadius = wide ? 0.082 : 0.076;
+    addMesh(eye, circle(irisRadius + 0.012, 24), dark, [0, resolved === "kind" ? -0.012 : -0.004, 0.026]);
+    addMesh(eye, circle(irisRadius, 22), iris, [0, resolved === "kind" ? -0.012 : -0.004, 0.031]);
+    addMesh(eye, circle(0.042, 20), dark, [0, -0.006, 0.037]);
+    addMesh(eye, circle(resolved === "sparkle" ? 0.019 : 0.015, 14), highlight, [-0.019, 0.022, 0.045]);
+    addMesh(eye, circle(0.0065, 10), highlight, [0.022, -0.027, 0.046]);
+    // A fine upper lid gives the eye an illustrated edge without using a
+    // heavy whole-character outline.
+    addMesh(
+      eye,
+      cachedGeometry("eye-upper-lid", () => new THREE.TorusGeometry(0.105, 0.0105, 6, 24, Math.PI)),
+      dark,
+      [0, 0.008, 0.043],
+      [eyeScaleX, eyeScaleY * 0.82, 1],
+      [0, 0, 0],
+    );
     if (resolved === "sparkle") {
-      addMesh(eye, circle(0.007, 10), highlight, [0.02, -0.02, 0.035]);
+      addMesh(eye, cachedGeometry("eye-star-glint", () => new THREE.OctahedronGeometry(0.012, 0)), highlight, [0.025, -0.018, 0.052], [0.72, 1.35, 0.38]);
     }
     if (includesAny(resolved, ["lashes", "cat"])) addLashes(x < 0 ? -1 : 1, resolved === "lashes" ? 3 : 2);
     if (resolved === "focused") {
@@ -406,7 +441,7 @@ function createNose(parent: THREE.Object3D, style: string, skinShadow: Character
     addMesh(parent, cachedGeometry("nose-soft-triangle", () => new THREE.ConeGeometry(0.044, 0.055, 3)), skinShadow, [0, resolved === "upturned" ? 0.215 : 0.19, 0.58], [1, 1, 0.35], [90 * DEG, 0, resolved === "upturned" ? Math.PI : 0]);
   } else {
     const broad = resolved === "broad";
-    addMesh(parent, cachedGeometry("nose-button", () => new THREE.SphereGeometry(0.052, 18, 12)), skinShadow, [0, 0.19, 0.578], [broad ? 1.18 : 0.82, broad ? 0.58 : 0.66, 0.46]);
+    addMesh(parent, cachedGeometry("nose-button-v4", () => new THREE.SphereGeometry(0.036, 18, 12)), skinShadow, [0, 0.19, 0.578], [broad ? 1.24 : 0.82, broad ? 0.68 : 0.72, 0.34]);
   }
   if (resolved === "freckle") {
     const freckle = material("#9b654e", { surface: "detail" });
@@ -471,7 +506,7 @@ function createMouth(parent: THREE.Object3D, style: string): THREE.Group {
 }
 
 function addHair(
-  head: THREE.Group,
+  head: THREE.Object3D,
   profile: CharacterProfile,
   headScale: readonly [number, number, number],
   hairMaterial: CharacterMaterial,
@@ -480,8 +515,8 @@ function addHair(
   const style = resolveStyle(profile.hairStyle, HAIR_STYLES, "crop");
   // Stop the cap above the eye line. Extending the spherical shell past the
   // forehead made several styles read as a dark helmet and hid the large eyes.
-  const capGeometry = cachedGeometry("hair-cap", () => new THREE.SphereGeometry(0.625, 30, 18, 0, Math.PI * 2, 0, Math.PI * 0.46));
-  const lockGeometry = cachedGeometry("hair-lock", () => new THREE.SphereGeometry(0.18, 20, 14));
+  const capGeometry = cachedGeometry("hair-cap-v4", () => new THREE.SphereGeometry(0.625, 30, 18, 0, Math.PI * 2, 0, Math.PI * 0.41));
+  const lockGeometry = cachedGeometry("hair-lock-v4", () => new THREE.CapsuleGeometry(0.11, 0.2, 6, 14));
   const curlGeometry = cachedGeometry("hair-curl", () => new THREE.SphereGeometry(0.22, 18, 14));
   const sideGeometry = cachedGeometry("hair-side-lock", () => new THREE.CapsuleGeometry(0.105, 0.34, 7, 16));
   const cap = addMesh(
@@ -514,6 +549,17 @@ function addHair(
       [0.34, 0.52, 11 + sweep, short ? 0.68 : 0.9, true],
     ];
     for (const [x, y, angle, width, accent] of fringe) addLock(x, y, 0.505, width, short ? 0.42 : 0.55, 0.34, angle, accent);
+    const strandGeometry = cachedGeometry("hair-painted-strand", () => new THREE.CapsuleGeometry(0.016, 0.16, 4, 9));
+    for (const [x, y, angle] of [[-0.28, 0.545, -12 + sweep], [-0.055, 0.59, -3 + sweep], [0.19, 0.57, 8 + sweep]] as const) {
+      addMesh(
+        head,
+        strandGeometry,
+        hairHighlight,
+        [x * headScale[0], y, 0.568 * headScale[2]],
+        [1, short ? 0.62 : 0.88, 0.42],
+        [0, 0, angle * DEG],
+      );
+    }
   };
 
   const addSideburns = (length = 1): void => {
@@ -590,8 +636,8 @@ function addHair(
 }
 
 function addTraitDetail(
-  chest: THREE.Group,
-  head: THREE.Group,
+  chest: THREE.Object3D,
+  head: THREE.Object3D,
   trait: string,
   shirtAccent: CharacterMaterial,
   darkMaterial: CharacterMaterial,
@@ -611,8 +657,8 @@ function addTraitDetail(
 }
 
 function addOutfit(
-  torso: THREE.Group,
-  hips: THREE.Group,
+  torso: THREE.Object3D,
+  hips: THREE.Object3D,
   profile: CharacterProfile,
   shirtMaterial: CharacterMaterial,
   shirtShadow: CharacterMaterial,
@@ -688,23 +734,39 @@ function addOutfit(
 }
 
 function addArm(
-  chest: THREE.Group,
+  chest: THREE.Object3D,
   side: -1 | 1,
   skinMaterial: CharacterMaterial,
   shirtMaterial: CharacterMaterial,
   shirtAccent: CharacterMaterial,
   outfitStyle: string,
-): { shoulder: THREE.Group; arm: THREE.Group; forearm: THREE.Group; hand: THREE.Group } {
-  const shoulder = joint(chest, side * 0.43, 0.22, 0);
-  const arm = joint(shoulder, 0, 0, 0);
+): { shoulder: THREE.Bone; arm: THREE.Bone; forearm: THREE.Bone; hand: THREE.Bone } {
+  const sideName = side < 0 ? "left" : "right";
+  const shoulder = boneJoint(chest, `${sideName}-shoulder`, side * 0.43, 0.22, 0);
+  const arm = boneJoint(shoulder, `${sideName}-upper-arm`, 0, 0, 0);
   const longSleeve = includesAny(outfitStyle, ["jacket", "sweater", "hoodie", "coat"]);
+  addMesh(
+    arm,
+    cachedGeometry("sleeve-shoulder-cap-v4", () => new THREE.SphereGeometry(0.135, 18, 12)),
+    shirtMaterial,
+    [0, -0.045, 0],
+    [1.05, 0.88, 0.92],
+  );
   addMesh(arm, cachedGeometry("arm-upper-chibi", () => new THREE.CylinderGeometry(0.11, 0.095, 0.34, 18)), shirtMaterial, [0, -0.16, 0]);
+  addMesh(
+    arm,
+    cachedGeometry("sleeve-piping-v4", () => new THREE.TorusGeometry(0.103, 0.012, 6, 18)),
+    shirtAccent,
+    [0, -0.285, 0],
+    [1, 0.84, 1],
+    [90 * DEG, 0, 0],
+  );
   addMesh(arm, cachedGeometry("sleeve-cuff-chibi", () => new THREE.CylinderGeometry(0.116, 0.116, 0.065, 18)), shirtAccent, [0, -0.31, 0]);
 
-  const forearm = joint(arm, 0, -0.34, 0);
+  const forearm = boneJoint(arm, `${sideName}-forearm`, 0, -0.34, 0);
   addMesh(forearm, cachedGeometry("arm-forearm-chibi", () => new THREE.CylinderGeometry(0.09, 0.078, 0.33, 18)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.155, 0]);
   if (longSleeve) addMesh(forearm, cachedGeometry("wrist-cuff-chibi", () => new THREE.CylinderGeometry(0.093, 0.093, 0.065, 18)), shirtAccent, [0, -0.3, 0]);
-  const hand = joint(forearm, 0, -0.34, 0);
+  const hand = boneJoint(forearm, `${sideName}-hand`, 0, -0.34, 0);
   addMesh(hand, cachedGeometry("hand-palm-chibi", () => new THREE.SphereGeometry(0.112, 18, 13)), skinMaterial, [0, -0.045, 0.01], [0.94, 1.02, 0.78]);
   addMesh(
     hand,
@@ -718,24 +780,32 @@ function addArm(
 }
 
 function addLeg(
-  hips: THREE.Group,
+  hips: THREE.Object3D,
   side: -1 | 1,
   skinMaterial: CharacterMaterial,
   trouserMaterial: CharacterMaterial,
   shoeMaterial: CharacterMaterial,
   outfitStyle: string | number,
-): { leg: THREE.Group; shin: THREE.Group; foot: THREE.Group } {
-  const leg = joint(hips, side * 0.205, -0.14, 0);
+): { leg: THREE.Bone; shin: THREE.Bone; foot: THREE.Bone } {
+  const sideName = side < 0 ? "left" : "right";
+  const leg = boneJoint(hips, `${sideName}-upper-leg`, side * 0.205, -0.14, 0);
   const resolvedOutfit = resolveStyle(outfitStyle, OUTFIT_STYLES, "tee");
   const dress = includesAny(resolvedOutfit, ["dress", "skirt"]);
   const upperMaterial = dress ? skinMaterial : trouserMaterial;
   addMesh(leg, cachedGeometry("leg-upper-chibi", () => new THREE.CylinderGeometry(0.135, 0.12, 0.42, 18)), upperMaterial, [0, -0.2, 0]);
 
-  const shin = joint(leg, 0, -0.42, 0);
+  const shin = boneJoint(leg, `${sideName}-shin`, 0, -0.42, 0);
+  addMesh(
+    shin,
+    cachedGeometry("knee-soft-v4", () => new THREE.SphereGeometry(0.118, 16, 11)),
+    skinMaterial,
+    [0, -0.012, 0.012],
+    [1.02, 0.78, 0.9],
+  );
   addMesh(shin, cachedGeometry("leg-shin-chibi", () => new THREE.CylinderGeometry(0.115, 0.09, 0.39, 18)), skinMaterial, [0, -0.18, 0]);
   addMesh(shin, cachedGeometry("shoe-collar-chibi", () => new THREE.CylinderGeometry(0.108, 0.108, 0.12, 18)), shoeMaterial, [0, -0.33, 0]);
 
-  const foot = joint(shin, 0, -0.4, 0.07);
+  const foot = boneJoint(shin, `${sideName}-foot`, 0, -0.4, 0.07);
   addMesh(foot, cachedGeometry("shoe-upper-chibi", () => new THREE.CapsuleGeometry(0.105, 0.15, 6, 16)), shoeMaterial, [0, -0.012, 0.085], [1.08, 1, 1], [90 * DEG, 0, 0]);
   addMesh(foot, cachedGeometry("shoe-toe-chibi", () => new THREE.SphereGeometry(0.116, 18, 12)), shoeMaterial, [0, -0.018, 0.235], [1.08, 0.74, 1.08]);
   addMesh(foot, cachedGeometry("shoe-sole-chibi", () => new THREE.BoxGeometry(0.255, 0.042, 0.36)), material("#e9edf0"), [0, -0.1, 0.09]);
@@ -752,26 +822,35 @@ function createHeadGeometry(faceStyle: string): THREE.BufferGeometry {
       const y = position.getY(index);
       const z = position.getZ(index);
       const normalizedY = THREE.MathUtils.clamp(y / 0.62, -1, 1);
-      let width = 1;
-      let depth = 1;
+      // Start with a cheek-and-jaw silhouette rather than a scaled ball: the
+      // upper cranium stays broad, cheeks are gently full, and the chin tapers.
+      const cheek = Math.exp(-Math.pow((normalizedY + 0.12) / 0.42, 2)) * 0.045;
+      const chinTaper = normalizedY < -0.42
+        ? THREE.MathUtils.lerp(1, 0.865, THREE.MathUtils.smoothstep(-normalizedY, 0.42, 1))
+        : 1;
+      let width = (1 + cheek) * chinTaper;
+      let depth = z >= 0 ? 0.965 : 0.91;
       if (faceStyle === "heart") {
-        width = THREE.MathUtils.lerp(0.9, 1.055, (normalizedY + 1) * 0.5);
-        depth = THREE.MathUtils.lerp(0.96, 1.01, (normalizedY + 1) * 0.5);
+        width *= THREE.MathUtils.lerp(0.91, 1.045, (normalizedY + 1) * 0.5);
+        depth *= THREE.MathUtils.lerp(0.97, 1.015, (normalizedY + 1) * 0.5);
       } else if (faceStyle === "soft-square") {
-        width = 1 + 0.045 * (1 - Math.abs(normalizedY));
+        width *= 1 + 0.035 * (1 - Math.abs(normalizedY));
         if (normalizedY < -0.35) width *= 1.018;
-        depth = 0.975;
+        depth *= 0.99;
       } else if (faceStyle === "broad") {
-        width = 1.04 + 0.025 * (1 - Math.abs(normalizedY));
-        depth = 0.99;
+        width *= 1.035 + 0.018 * (1 - Math.abs(normalizedY));
+        depth *= 1.01;
       } else if (faceStyle === "slim") {
-        width = THREE.MathUtils.lerp(0.93, 0.985, (normalizedY + 1) * 0.5);
-        depth = 0.975;
+        width *= THREE.MathUtils.lerp(0.94, 0.985, (normalizedY + 1) * 0.5);
+        depth *= 0.985;
       } else if (faceStyle === "oval") {
-        width = 0.985;
-        depth = 0.99;
+        width *= 0.985;
+        depth *= 1.005;
       }
-      position.setXYZ(index, x * width, y, z * depth);
+      // Flatten only the rear skull and add a soft front cheek plane. It keeps
+      // facial features readable under changing scene lights.
+      const frontPlane = z > 0 && Math.abs(normalizedY) < 0.58 ? 0.012 * (1 - Math.abs(normalizedY) / 0.58) : 0;
+      position.setXYZ(index, x * width, y, z * depth + frontPlane);
     }
     position.needsUpdate = true;
     geometry.computeVertexNormals();
@@ -787,18 +866,12 @@ export function createCharacter(profile: CharacterProfile): Character {
   group.userData.characterName = profile.name;
   group.userData.trait = profile.trait;
 
-  const root = joint(group, 0, 0, 0);
-  root.name = "motion-root";
-  const hips = joint(root, 0, 1, 0);
-  hips.name = "hips";
-  const torso = joint(hips, 0, 0.37, 0);
-  torso.name = "torso";
-  const chest = joint(torso, 0, 0.06, 0);
-  chest.name = "chest";
-  const neck = joint(torso, 0, 0.46, 0);
-  neck.name = "neck";
-  const head = joint(neck, 0, 0.3, 0);
-  head.name = "head";
+  const root = boneJoint(group, "root", 0, 0, 0);
+  const hips = boneJoint(root, "hips", 0, 1, 0);
+  const torso = boneJoint(hips, "spine", 0, 0.37, 0);
+  const chest = boneJoint(torso, "chest", 0, 0.06, 0);
+  const neck = boneJoint(chest, "neck", 0, 0.4, 0);
+  const head = boneJoint(neck, "head", 0, 0.3, 0);
   head.scale.setScalar(1.06);
 
   const skinMaterial = material(profile.skin || "#d99a73", { surface: "skin" });
@@ -859,6 +932,32 @@ export function createCharacter(profile: CharacterProfile): Character {
   const leftLeg = addLeg(hips, -1, skinMaterial, trouserMaterial, shoeMaterial, outfitStyle);
   const rightLeg = addLeg(hips, 1, skinMaterial, trouserMaterial, shoeMaterial, outfitStyle);
 
+  const skeleton = new THREE.Skeleton([
+    root,
+    hips,
+    torso,
+    chest,
+    neck,
+    head,
+    left.shoulder,
+    left.arm,
+    left.forearm,
+    left.hand,
+    right.shoulder,
+    right.arm,
+    right.forearm,
+    right.hand,
+    leftLeg.leg,
+    leftLeg.shin,
+    leftLeg.foot,
+    rightLeg.leg,
+    rightLeg.shin,
+    rightLeg.foot,
+  ]);
+  group.updateMatrixWorld(true);
+  skeleton.calculateInverses();
+  group.userData.skeleton = skeleton;
+
   const joints: CharacterJoints = {
     root,
     hips,
@@ -895,6 +994,7 @@ export function createCharacter(profile: CharacterProfile): Character {
   const character: Character = {
     group,
     joints,
+    skeleton,
     profile: { ...profile },
     animation: { state: "idle", stateStartedAt: 0 },
   };

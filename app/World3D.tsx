@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
   createCharacter,
@@ -36,6 +36,7 @@ type SceneComposition = {
 
 type TimeOfDay = "day" | "sunset" | "night";
 type WeatherMode = "clear" | "rain" | "snow";
+type RenderState = "loading" | "ready" | "lost" | "error";
 type CameraFocus = { kind: "talk" | "food" | "play" | "rest"; until: number };
 type WorldRuntime = {
   director: ReturnType<typeof createWorldDirector>;
@@ -125,12 +126,12 @@ const SUPPORTING_RESIDENTS: CharacterProfile[] = [
 
 const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   home: {
-    target: new THREE.Vector3(-9, 2.5, 4.7),
-    camera: new THREE.Vector3(4.2, 10.6, 22),
+    target: new THREE.Vector3(-7.2, 2.35, 5.2),
+    camera: new THREE.Vector3(-4.9, 5.1, 20.4),
     points: [
-      new THREE.Vector3(-5, 0, 11.3),
-      new THREE.Vector3(-3.8, 0, 10.3),
-      new THREE.Vector3(-2.6, 0, 9.3),
+      new THREE.Vector3(-8.25, 0, 8.75),
+      new THREE.Vector3(-5.75, 0, 8.95),
+      new THREE.Vector3(-3.25, 0, 8.75),
       new THREE.Vector3(-3.1, 0, 2.8),
       new THREE.Vector3(-7.8, 0, 0.5),
       new THREE.Vector3(-11.8, 0, 7.6),
@@ -138,9 +139,9 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(-2.8, 0, 8.2),
     ],
     starts: [
-      new THREE.Vector3(-5, 0, 11.3),
-      new THREE.Vector3(-3.8, 0, 10.3),
-      new THREE.Vector3(-2.6, 0, 9.3),
+      new THREE.Vector3(-8.25, 0, 8.75),
+      new THREE.Vector3(-5.75, 0, 8.95),
+      new THREE.Vector3(-3.25, 0, 8.75),
       new THREE.Vector3(-3.1, 0, 2.65),
       new THREE.Vector3(-7.6, 0, 0.55),
       new THREE.Vector3(-11.5, 0, 7.5),
@@ -242,9 +243,11 @@ const CINEMATIC_VIEWS: Partial<
   Record<TownSceneName, { target: THREE.Vector3; camera: THREE.Vector3; fov: number }>
 > = {
   home: {
-    target: new THREE.Vector3(-3.8, 1.9, 10.3),
-    camera: new THREE.Vector3(2.65, 4.62, 17.93),
-    fov: 34,
+    // Front-facing town portrait: the house stays fully readable behind three
+    // evenly spaced residents, matching the accepted key-art composition.
+    target: new THREE.Vector3(-6.75, 2.7, 5.35),
+    camera: new THREE.Vector3(-4.9, 5.4, 21.4),
+    fov: 41,
   },
   plaza: {
     target: new THREE.Vector3(-7.7, 2.5, -4.5),
@@ -295,6 +298,31 @@ function chooseResidents(
     }
   }
   return ordered.slice(0, 6);
+}
+
+const HOME_AVATAR_ASSETS = [
+  "avatars/v4-xiaoman.png",
+  "avatars/v4-aqi.png",
+  "avatars/v4-lulu.png",
+] as const;
+
+function homeAvatarAsset(profile: CharacterProfile, index: number): string {
+  const id = String(profile.id);
+  if (id === "1") return HOME_AVATAR_ASSETS[0];
+  if (id === "2") return HOME_AVATAR_ASSETS[1];
+  if (id === "3") return HOME_AVATAR_ASSETS[2];
+  const style = Number.parseInt(String(profile.hairStyle), 10);
+  return HOME_AVATAR_ASSETS[(Number.isFinite(style) ? Math.abs(style) : index) % HOME_AVATAR_ASSETS.length];
+}
+
+function homePortraitResidents(
+  residents: CharacterProfile[],
+  selectedId: string | number,
+): CharacterProfile[] {
+  const firstThree = residents.slice(0, 3);
+  if (firstThree.some((resident) => String(resident.id) === String(selectedId))) return firstThree;
+  const selected = residents.find((resident) => String(resident.id) === String(selectedId));
+  return selected ? [selected, ...firstThree.slice(0, 2)] : firstThree;
 }
 
 function prepareProfile(profile: CharacterProfile): CharacterProfile {
@@ -365,6 +393,41 @@ function createSelectionRing(): THREE.Mesh {
   ring.position.y = 0.035;
   ring.renderOrder = 3;
   return ring;
+}
+
+function createCharacterContactShadow(): THREE.Mesh {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const gradient = context.createRadialGradient(32, 32, 4, 32, 32, 30);
+    gradient.addColorStop(0, "rgba(43, 48, 38, 0.52)");
+    gradient.addColorStop(0.42, "rgba(43, 48, 38, 0.27)");
+    gradient.addColorStop(1, "rgba(43, 48, 38, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 64, 64);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  const shadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.05, 1.28),
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      opacity: 0.52,
+      depthWrite: false,
+      toneMapped: false,
+    }),
+  );
+  shadow.name = "resident-contact-shadow";
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = 0.018;
+  shadow.renderOrder = 2;
+  return shadow;
 }
 
 function createAtmosphere(center: THREE.Vector3): THREE.Group {
@@ -514,7 +577,7 @@ function disposeWorld(scene: THREE.Scene): void {
   if (scene.environment instanceof THREE.Texture) textures.add(scene.environment);
 
   scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite || object instanceof THREE.Line)) return;
+    if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite || object instanceof THREE.Line || object instanceof THREE.Points)) return;
     if (object.geometry && !object.geometry.userData.sharedCharacterAsset) geometries.add(object.geometry);
     const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of objectMaterials) {
@@ -545,6 +608,7 @@ export default function World3D({
   cinematicView = false,
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const [renderState, setRenderState] = useState<RenderState>("loading");
   const residentsRef = useRef(residents);
   const runtimeRef = useRef<WorldRuntime | null>(null);
   const residentAppearanceKey = residents
@@ -575,24 +639,36 @@ export default function World3D({
     const element = host.current;
     if (!element) return;
 
+    queueMicrotask(() => setRenderState("loading"));
+
     const location = sceneName(scene);
+    const homePlate = location === "home";
     const indoor = location === "shop" || location === "interior";
     const composition = SCENE_COMPOSITIONS[location];
-    const cinematic = !indoor && cinematicView ? CINEMATIC_VIEWS[location] : undefined;
+    // The home screen shares the close, three-resident composition used by the
+    // immersive view, so the playable first impression matches the key art.
+    const cinematic = !indoor && (cinematicView || location === "home")
+      ? CINEMATIC_VIEWS[location]
+      : undefined;
     const stagedHomeOpening = location === "home" && Boolean(cinematic);
     const viewCamera = cinematic?.camera ?? composition.camera;
     const viewTarget = cinematic?.target ?? composition.target;
     const viewFov = cinematic?.fov ?? (indoor ? 34 : 33);
-    const profiles = chooseResidents(residentsRef.current, selectedId).slice(0, 4);
+    const profiles = chooseResidents(residentsRef.current, selectedId).slice(
+      0,
+      location === "home" ? 3 : 4,
+    );
     const world = new THREE.Scene();
     world.name = "Sunny Side Stories";
-    world.background = createSkyTexture(timeOfDay);
+    world.background = homePlate ? null : createSkyTexture(timeOfDay);
     const fogColor = timeOfDay === "night" ? "#243653" : timeOfDay === "sunset" ? "#ddb8a8" : "#c9e9f3";
-    world.fog = new THREE.Fog(
-      fogColor,
-      indoor ? 18 : timeOfDay === "night" ? 31 : 42,
-      indoor ? 48 : timeOfDay === "night" ? 82 : 110,
-    );
+    world.fog = homePlate
+      ? null
+      : new THREE.Fog(
+          fogColor,
+          indoor ? 18 : timeOfDay === "night" ? 31 : 42,
+          indoor ? 48 : timeOfDay === "night" ? 82 : 110,
+        );
 
     const width = Math.max(1, element.clientWidth);
     const height = Math.max(1, element.clientHeight);
@@ -604,32 +680,33 @@ export default function World3D({
     try {
       renderer = new THREE.WebGLRenderer({
         antialias: true,
-        alpha: false,
+        alpha: homePlate,
         powerPreference: "high-performance",
       });
     } catch {
-      element.textContent = "当前浏览器暂时无法显示 3D 小城，请开启硬件加速后重试。";
-      return;
+      queueMicrotask(() => setRenderState("error"));
+      return () => disposeWorld(world);
     }
     renderer.setSize(width, height, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    if (homePlate) renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 0.96 : 0.8) : timeOfDay === "sunset" ? 0.98 : 1.06;
+    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 0.96 : 0.8) : timeOfDay === "sunset" ? 1.02 : 1.12;
     renderer.domElement.style.imageRendering = "auto";
     element.replaceChildren(renderer.domElement);
 
     const skyLight = new THREE.HemisphereLight(
       timeOfDay === "night" ? "#7894c8" : timeOfDay === "sunset" ? "#ffe1c4" : "#e6f6ff",
       timeOfDay === "night" ? "#18243d" : timeOfDay === "sunset" ? "#806a72" : "#a8bb91",
-      indoor ? (timeOfDay === "night" ? 0.72 : 1.18) : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.9 : 1.38,
+      indoor ? (timeOfDay === "night" ? 0.76 : 1.2) : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.78 : 1.02,
     );
     world.add(skyLight);
     const sun = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#aac8ff" : timeOfDay === "sunset" ? "#ffb06d" : "#fff1d2",
-      indoor ? (timeOfDay === "night" ? 0.78 : 1.45) : timeOfDay === "night" ? 1.05 : timeOfDay === "sunset" ? 2.15 : 1.72,
+      indoor ? (timeOfDay === "night" ? 0.76 : 1.38) : timeOfDay === "night" ? 0.98 : timeOfDay === "sunset" ? 2.05 : 1.96,
     );
     sun.position.copy(composition.target).add(
       timeOfDay === "sunset" ? new THREE.Vector3(-24, 12, 10) : new THREE.Vector3(-17, 26, 15),
@@ -643,21 +720,21 @@ export default function World3D({
     sun.shadow.camera.right = shadowExtent;
     sun.shadow.camera.top = shadowExtent;
     sun.shadow.camera.bottom = -shadowExtent;
-    sun.shadow.radius = 3;
+    sun.shadow.radius = 4.5;
     sun.shadow.bias = -0.00018;
     sun.shadow.normalBias = 0.012;
     sun.target.position.copy(composition.target);
     world.add(sun, sun.target);
     const fill = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#5579c2" : timeOfDay === "sunset" ? "#9f8bd5" : "#badff0",
-      indoor ? 0.48 : timeOfDay === "night" ? 0.42 : timeOfDay === "sunset" ? 0.34 : 0.52,
+      indoor ? 0.5 : timeOfDay === "night" ? 0.4 : timeOfDay === "sunset" ? 0.3 : 0.32,
     );
     fill.position.copy(composition.target).add(new THREE.Vector3(16, 9, -12));
     world.add(fill);
     if (!indoor) {
       const softAmbient = new THREE.AmbientLight(
         timeOfDay === "night" ? "#7390c4" : timeOfDay === "sunset" ? "#ffe1c8" : "#fff9e9",
-        timeOfDay === "night" ? 0.05 : timeOfDay === "sunset" ? 0.1 : 0.16,
+        timeOfDay === "night" ? 0.04 : timeOfDay === "sunset" ? 0.06 : 0.08,
       );
       world.add(softAmbient);
     }
@@ -667,6 +744,7 @@ export default function World3D({
     }
 
     const town = createTown(location);
+    town.group.visible = !homePlate;
     world.add(town.group);
 
     const characterByGroup = new Map<THREE.Group, Character>();
@@ -674,12 +752,22 @@ export default function World3D({
       const character = createCharacter(prepareProfile(profile));
       const start = composition.starts[index % composition.starts.length];
       character.group.position.copy(start);
-      character.group.scale.setScalar(index === 0 ? (indoor ? 0.56 : 0.72) : (indoor ? 0.53 : 0.68) + (index % 3) * 0.006);
+      const sceneScale = location === "home"
+        ? index === 0
+          ? 0.99
+          : 0.94 + (index % 2) * 0.012
+        : index === 0
+          ? indoor
+            ? 0.56
+            : 0.72
+          : (indoor ? 0.53 : 0.68) + (index % 3) * 0.006;
+      character.group.scale.setScalar(sceneScale);
       if (indoor) character.group.rotation.y = index % 2 === 0 ? 0.18 : -0.28;
       else {
         character.group.lookAt(viewCamera.x, 0, viewCamera.z);
       }
       character.group.userData.isSelected = index === 0;
+      character.group.add(createCharacterContactShadow());
       character.group.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           if (!object.geometry.boundingSphere) object.geometry.computeBoundingSphere();
@@ -722,7 +810,7 @@ export default function World3D({
       turnSpeed: 7.5,
       acceleration: 7,
       durations: {
-        idle: stagedHomeOpening && index < 3 ? [8, 11] : [1.4, 3.6],
+        idle: stagedHomeOpening && index < 3 ? [3600, 3600] : [1.4, 3.6],
         walk: [3.8, 7.5],
         run: [2.2, 4.2],
         talk: [4.4, 7.2],
@@ -743,7 +831,7 @@ export default function World3D({
       avoidancePadding: 0.22,
       avoidanceStrength: 1.7,
       conversationDistance: 1.55,
-      conversationRate: 0.3,
+      conversationRate: stagedHomeOpening ? 0 : 0.3,
       conversationCooldown: 5,
       camera,
       cameraOptions: {
@@ -751,7 +839,7 @@ export default function World3D({
         positionDamping: 2,
         targetDamping: 4,
         minFov: 24,
-        maxFov: 39,
+        maxFov: 43,
       },
       applyAnimation(group, state, elapsed, delta) {
         const character = characterByGroup.get(group);
@@ -790,8 +878,27 @@ export default function World3D({
     const restCameraOffset = new THREE.Vector3(3.1, 2.2, 4.1);
     let frameId = 0;
     let stopped = false;
+    let contextLost = false;
+    let hasPresentedFrame = false;
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      contextLost = true;
+      hasPresentedFrame = false;
+      setRenderState("lost");
+    };
+    const handleContextRestored = () => {
+      contextLost = false;
+      hasPresentedFrame = false;
+      setRenderState("loading");
+    };
+    renderer.domElement.addEventListener("webglcontextlost", handleContextLost);
+    renderer.domElement.addEventListener("webglcontextrestored", handleContextRestored);
     const render = () => {
       if (stopped) return;
+      if (contextLost) {
+        frameId = requestAnimationFrame(render);
+        return;
+      }
       const delta = Math.min(clock.getDelta(), 0.06);
       const elapsed = clock.elapsedTime;
       town.update(elapsed);
@@ -838,10 +945,22 @@ export default function World3D({
       }
       director.update(delta, elapsed);
 
+      // The home screen is a persistent playable portrait rather than a short
+      // loading pose. After an explicit action, residents ease back to their
+      // authored marks and face the player; other locations remain autonomous.
+      if (stagedHomeOpening && !focusActive) {
+        characters.forEach((character, index) => {
+          const mark = composition.starts[index % composition.starts.length];
+          character.group.position.lerp(mark, 1 - Math.exp(-3.2 * delta));
+          character.group.lookAt(viewCamera.x, 0, viewCamera.z);
+        });
+      }
+
       const pulse = 1 + Math.sin(elapsed * 3.2) * 0.09;
       selectionRing.scale.setScalar(pulse);
-      selectionRing.visible = !focusActive;
-      nameTag.visible = !focusActive;
+      const openingPortrait = stagedHomeOpening;
+      selectionRing.visible = !focusActive && !openingPortrait;
+      nameTag.visible = !focusActive && !openingPortrait;
       nameTag.position.y = 3.68 + Math.sin(elapsed * 2.25) * 0.045;
       atmosphere.children.forEach((petal, index) => {
         const phase = Number(petal.userData.phase) || index;
@@ -851,7 +970,19 @@ export default function World3D({
         petal.rotation.z = elapsed * 0.35 + phase * 0.6;
       });
 
-      renderer.render(world, camera);
+      try {
+        renderer.render(world, camera);
+      } catch {
+        stopped = true;
+        setRenderState("error");
+        return;
+      }
+      if (!hasPresentedFrame) {
+        hasPresentedFrame = true;
+        requestAnimationFrame(() => {
+          if (!stopped && !contextLost) setRenderState("ready");
+        });
+      }
       frameId = requestAnimationFrame(render);
     };
     render();
@@ -871,6 +1002,8 @@ export default function World3D({
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       clock.stop();
+      renderer.domElement.removeEventListener("webglcontextlost", handleContextLost);
+      renderer.domElement.removeEventListener("webglcontextrestored", handleContextRestored);
       if (runtimeRef.current?.director === director) runtimeRef.current = null;
       disposeWorld(world);
       renderer.dispose();
@@ -918,5 +1051,95 @@ export default function World3D({
     }
   }, [actionCue, residentAppearanceKey, scene, selectedId, timeOfDay, weatherMode]);
 
-  return <div className="world3d" ref={host} aria-label="晴天市实时三维生活场景" />;
+  const statusText = renderState === "error"
+    ? "当前浏览器无法开启实时小城，请开启硬件加速后刷新重试"
+    : renderState === "lost"
+      ? "实时画面暂时中断，正在恢复晴天市"
+      : "正在进入晴天市";
+  const homePlate = sceneName(scene) === "home";
+  const portraitResidents = homePlate ? homePortraitResidents(residents, selectedId) : [];
+
+  return (
+    <div
+      className="world3d"
+      data-render-state={renderState}
+      data-scene-mode={homePlate ? "plate" : "3d"}
+      data-time={timeOfDay}
+      aria-label="晴天市实时三维生活场景"
+      aria-busy={renderState !== "ready"}
+    >
+      {homePlate ? (
+        <div
+          className="world3d-scene-plate"
+          data-time={timeOfDay}
+          data-weather={weatherMode}
+          role="img"
+          aria-label="晴天市高清街区背景"
+          style={{ backgroundImage: 'url("v4-home-background.webp")' }}
+        />
+      ) : null}
+      {homePlate ? (
+        <div className="world3d-wind-layer" aria-hidden="true">
+          {["left", "right"].map((patch, patchIndex) => (
+            <div className={`world3d-wind-patch world3d-wind-patch-${patch}`} key={patch}>
+              {Array.from({ length: 30 }, (_, blade) => (
+                <span
+                  key={blade}
+                  style={{
+                    left: `${(blade * 47 + (blade % 3) * 11 + patchIndex * 23) % 98}%`,
+                    bottom: `${(blade * 29 + 7 + patchIndex * 13) % 68}%`,
+                    height: `${7 + (blade % 6) * 1.7}px`,
+                    animationDelay: `-${((blade + patchIndex * 5) % 13) * 0.17}s`,
+                    animationDuration: `${1.65 + (blade % 7) * 0.17}s`,
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="world3d-stage" ref={host} aria-hidden={renderState !== "ready"} />
+      {homePlate ? (
+        <div className="world3d-avatar-layer" aria-label="晴天市居民">
+          {portraitResidents.map((resident, index) => {
+            const selected = String(resident.id) === String(selectedId);
+            return (
+              <div
+                className="world3d-avatar"
+                data-slot={index}
+                data-selected={selected ? "true" : "false"}
+                data-action={selected ? actionCue?.kind ?? "idle" : "idle"}
+                key={`${resident.id}:${selected ? actionCue?.token ?? 0 : 0}`}
+              >
+                <span
+                  className="world3d-avatar-portrait"
+                  role="img"
+                  aria-label={`${resident.name}的高清角色`}
+                  style={{ backgroundImage: `url("${homeAvatarAsset(resident, index)}")` }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      <div className="world3d-poster" role="status" aria-live="polite">
+        <div
+          className="world3d-poster-image"
+          role="img"
+          aria-label="晴天市居民与街道预览"
+          style={{
+            // Inline relative URLs resolve from the document in both Sites and
+            // the GitHub Pages sub-directory; a root CSS URL would miss the
+            // repository base path on GitHub.
+            backgroundImage:
+              'linear-gradient(180deg,rgba(255,255,255,.015) 62%,rgba(26,42,36,.1)),url("v4-loading.webp")',
+          }}
+        />
+        <div className="world3d-loading-status" data-status-kind={renderState}>
+          <span aria-hidden="true" />
+          <b>{statusText}</b>
+        </div>
+      </div>
+    </div>
+  );
 }
