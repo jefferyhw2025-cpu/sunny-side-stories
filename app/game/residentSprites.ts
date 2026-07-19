@@ -229,6 +229,12 @@ function profileFrames(
   pack: ResidentSpritePack,
   row: number,
 ): readonly THREE.CanvasTexture[] {
+  // The three built-in residents are the approved art-direction references;
+  // preserve their exact painted skin, hair and fabric colours. Recolouring is
+  // reserved for residents made in the creator.
+  if (["1", "2", "3"].includes(String(profile.id))) {
+    return pack.textures[row] ?? pack.textures[0];
+  }
   const key = [row, profile.skin, profile.hair, profile.shirt].join(":").toLowerCase();
   const cached = recolouredFrameCache.get(key);
   if (cached) return cached;

@@ -158,8 +158,8 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(-2.8, 0, 8.2),
     ],
     starts: [
-      new THREE.Vector3(-10.9, 0, 6.38),
       new THREE.Vector3(-12.75, 0, 6.46),
+      new THREE.Vector3(-10.9, 0, 6.38),
       new THREE.Vector3(-9.05, 0, 6.42),
       new THREE.Vector3(-3.1, 0, 2.65),
       new THREE.Vector3(-7.6, 0, 0.55),
