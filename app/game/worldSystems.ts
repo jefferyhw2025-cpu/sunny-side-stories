@@ -782,7 +782,9 @@ class WorldDirectorImpl implements WorldDirector {
     if (roll < 0.45) this.transition(resident, "walk", "wander");
     else if (roll < 0.54) this.transition(resident, "run", "wander-fast");
     else if (roll < 0.65) this.transition(resident, "eat", "daily-life");
-    else if (roll < 0.76) this.transition(resident, "sit", "daily-life");
+    // Sitting needs a real seat anchor. Autonomous residents stay upright
+    // unless a scene interaction explicitly places them at a bench/chair.
+    else if (roll < 0.76) this.transition(resident, "idle", "daily-life-pause");
     else if (roll < 0.88) this.transition(resident, "happy", "mood");
     else if (roll < 0.95) this.transition(resident, "sad", "mood");
     else this.transition(resident, "idle", "pause");

@@ -12,6 +12,17 @@ import {
 } from "./game/characters";
 import { createTown, type TownSceneName } from "./game/environment";
 import {
+  preloadAuthoredEnvironment,
+  type AuthoredEnvironmentAssets,
+} from "./game/environmentAssets";
+import {
+  attachResidentSprite,
+  groundIllustratedResident,
+  preloadResidentSprites,
+  updateResidentSprite,
+  type ResidentSpritePack,
+} from "./game/residentSprites";
+import {
   createWorldDirector,
   type CircularObstacle,
   type PointLike,
@@ -40,12 +51,15 @@ type TimeOfDay = "day" | "sunset" | "night";
 type WeatherMode = "clear" | "rain" | "snow";
 type RenderState = "loading" | "ready" | "lost" | "error";
 type CameraFocus = { kind: "talk" | "food" | "play" | "rest"; until: number };
+type SeatAnchor = { position: THREE.Vector3; yaw: number };
 type WorldRuntime = {
   director: ReturnType<typeof createWorldDirector>;
   characters: Character[];
   clock: THREE.Clock;
   focus: CameraFocus | null;
   controlMode: "auto" | "keyboard" | "pointer";
+  openingPortraitLocked: boolean;
+  seats: SeatAnchor[];
 };
 type WeatherLayer = { group: THREE.Object3D; update: (time: number) => void };
 
@@ -129,12 +143,14 @@ const SUPPORTING_RESIDENTS: CharacterProfile[] = [
 
 const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
   home: {
-    target: new THREE.Vector3(-7.2, 2.35, 5.2),
-    camera: new THREE.Vector3(-4.9, 5.1, 20.4),
+    // Street portrait: a full home on the right, mature tree on the left and
+    // three residents on the cobbled foreground, while remaining a real map.
+    target: new THREE.Vector3(-10.7, 2.5, 5.95),
+    camera: new THREE.Vector3(-10.7, 5.25, 18.8),
     points: [
-      new THREE.Vector3(-8.25, 0, 8.75),
-      new THREE.Vector3(-5.75, 0, 8.95),
-      new THREE.Vector3(-3.25, 0, 8.75),
+      new THREE.Vector3(-10.9, 0, 6.38),
+      new THREE.Vector3(-12.75, 0, 6.46),
+      new THREE.Vector3(-9.05, 0, 6.42),
       new THREE.Vector3(-3.1, 0, 2.8),
       new THREE.Vector3(-7.8, 0, 0.5),
       new THREE.Vector3(-11.8, 0, 7.6),
@@ -142,9 +158,9 @@ const SCENE_COMPOSITIONS: Record<TownSceneName, SceneComposition> = {
       new THREE.Vector3(-2.8, 0, 8.2),
     ],
     starts: [
-      new THREE.Vector3(-8.25, 0, 8.75),
-      new THREE.Vector3(-5.75, 0, 8.95),
-      new THREE.Vector3(-3.25, 0, 8.75),
+      new THREE.Vector3(-10.9, 0, 6.38),
+      new THREE.Vector3(-12.75, 0, 6.46),
+      new THREE.Vector3(-9.05, 0, 6.42),
       new THREE.Vector3(-3.1, 0, 2.65),
       new THREE.Vector3(-7.6, 0, 0.55),
       new THREE.Vector3(-11.5, 0, 7.5),
@@ -248,9 +264,9 @@ const CINEMATIC_VIEWS: Partial<
   home: {
     // Front-facing town portrait: the house stays fully readable behind three
     // evenly spaced residents, matching the accepted key-art composition.
-    target: new THREE.Vector3(-6.75, 2.7, 5.35),
-    camera: new THREE.Vector3(-4.9, 5.4, 21.4),
-    fov: 41,
+    target: new THREE.Vector3(-10.7, 2.5, 5.95),
+    camera: new THREE.Vector3(-10.7, 5.25, 18.8),
+    fov: 31,
   },
   plaza: {
     target: new THREE.Vector3(-7.7, 2.5, -4.5),
@@ -625,7 +641,13 @@ function disposeWorld(scene: THREE.Scene): void {
 
   scene.traverse((object) => {
     if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite || object instanceof THREE.Line || object instanceof THREE.Points)) return;
-    if (object.geometry && !object.geometry.userData.sharedCharacterAsset) geometries.add(object.geometry);
+    if (
+      object.geometry
+      && !object.geometry.userData.sharedCharacterAsset
+      && !object.geometry.userData.sharedEnvironmentAsset
+    ) {
+      geometries.add(object.geometry);
+    }
     const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of objectMaterials) {
       if (material) materials.add(material);
@@ -633,7 +655,11 @@ function disposeWorld(scene: THREE.Scene): void {
   });
 
   for (const material of materials) {
-    if (material.userData.shared === true || material.userData.sharedCharacterAsset === true) continue;
+    if (
+      material.userData.shared === true
+      || material.userData.sharedCharacterAsset === true
+      || material.userData.sharedEnvironmentAsset === true
+    ) continue;
     for (const value of Object.values(material)) {
       if (value instanceof THREE.Texture) textures.add(value);
     }
@@ -641,7 +667,11 @@ function disposeWorld(scene: THREE.Scene): void {
   }
   for (const geometry of geometries) geometry.dispose();
   for (const texture of textures) {
-    if (texture.userData.shared !== true && texture.userData.sharedCharacterAsset !== true) texture.dispose();
+    if (
+      texture.userData.shared !== true
+      && texture.userData.sharedCharacterAsset !== true
+      && texture.userData.sharedEnvironmentAsset !== true
+    ) texture.dispose();
   }
 }
 
@@ -656,6 +686,10 @@ export default function World3D({
 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [renderState, setRenderState] = useState<RenderState>("loading");
+  const [environmentAssetsSettled, setEnvironmentAssetsSettled] = useState(false);
+  const [residentSpritesSettled, setResidentSpritesSettled] = useState(false);
+  const environmentAssetsRef = useRef<AuthoredEnvironmentAssets | null>(null);
+  const residentSpritesRef = useRef<ResidentSpritePack | null>(null);
   const residentsRef = useRef(residents);
   const runtimeRef = useRef<WorldRuntime | null>(null);
   const residentAppearanceKey = residents
@@ -683,21 +717,54 @@ export default function World3D({
   }, [residents]);
 
   useEffect(() => {
+    let active = true;
+    preloadAuthoredEnvironment()
+      .then((assets) => {
+        environmentAssetsRef.current = assets;
+      })
+      .finally(() => {
+        if (!active) return;
+        setEnvironmentAssetsSettled(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    preloadResidentSprites()
+      .then((assets) => {
+        residentSpritesRef.current = assets;
+      })
+      .finally(() => {
+        if (!active) return;
+        setResidentSpritesSettled(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const element = host.current;
     if (!element) return;
+    if (!environmentAssetsSettled || !residentSpritesSettled) {
+      queueMicrotask(() => setRenderState("loading"));
+      return;
+    }
 
     queueMicrotask(() => setRenderState("loading"));
 
     const location = sceneName(scene);
     const indoor = location === "shop" || location === "interior";
-    const sceneObstacles = indoor ? [] : location === "home" ? HOME_OBSTACLES : TOWN_OBSTACLES;
     const composition = SCENE_COMPOSITIONS[location];
     const cinematic = !indoor && cinematicView
       ? CINEMATIC_VIEWS[location]
       : undefined;
     const viewCamera = cinematic?.camera ?? composition.camera;
     const viewTarget = cinematic?.target ?? composition.target;
-    const viewFov = cinematic?.fov ?? (indoor ? 34 : 33);
+    const viewFov = cinematic?.fov ?? (location === "home" ? 31 : indoor ? 34 : 33);
     const profiles = chooseResidents(residentsRef.current, selectedId).slice(
       0,
       location === "home" ? 3 : 4,
@@ -737,20 +804,27 @@ export default function World3D({
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = timeOfDay === "night" ? (indoor ? 1.12 : 1.24) : timeOfDay === "sunset" ? 1.08 : 1.12;
+    // Neutral tone mapping keeps the warm plaster, terracotta and spring
+    // greens vivid. ACES was compressing this intentionally cheerful palette
+    // into the grey/brown cast visible in the previous build.
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = timeOfDay === "night"
+      ? (indoor ? 1.14 : 1.2)
+      : timeOfDay === "sunset"
+        ? 1.17
+        : 1.25;
     renderer.domElement.style.imageRendering = "auto";
     element.replaceChildren(renderer.domElement);
 
     const skyLight = new THREE.HemisphereLight(
       timeOfDay === "night" ? "#7894c8" : timeOfDay === "sunset" ? "#ffe1c4" : "#e6f6ff",
       timeOfDay === "night" ? "#18243d" : timeOfDay === "sunset" ? "#806a72" : "#a8bb91",
-      indoor ? (timeOfDay === "night" ? 1.02 : 1.2) : timeOfDay === "night" ? 1.16 : timeOfDay === "sunset" ? 0.92 : 1.02,
+      indoor ? (timeOfDay === "night" ? 1.02 : 1.25) : timeOfDay === "night" ? 1.16 : timeOfDay === "sunset" ? 1.04 : 1.28,
     );
     world.add(skyLight);
     const sun = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#aac8ff" : timeOfDay === "sunset" ? "#ffb06d" : "#fff1d2",
-      indoor ? (timeOfDay === "night" ? 1.02 : 1.38) : timeOfDay === "night" ? 1.08 : timeOfDay === "sunset" ? 2.05 : 1.96,
+      indoor ? (timeOfDay === "night" ? 1.02 : 1.42) : timeOfDay === "night" ? 1.08 : timeOfDay === "sunset" ? 2.12 : 2.24,
     );
     sun.position.copy(composition.target).add(
       timeOfDay === "sunset" ? new THREE.Vector3(-24, 12, 10) : new THREE.Vector3(-17, 26, 15),
@@ -771,13 +845,13 @@ export default function World3D({
     world.add(sun, sun.target);
     const fill = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#5579c2" : timeOfDay === "sunset" ? "#9f8bd5" : "#badff0",
-      indoor ? 0.5 : timeOfDay === "night" ? 0.84 : timeOfDay === "sunset" ? 0.38 : 0.32,
+      indoor ? 0.5 : timeOfDay === "night" ? 0.84 : timeOfDay === "sunset" ? 0.44 : 0.48,
     );
     fill.position.copy(composition.target).add(new THREE.Vector3(16, 9, -12));
     world.add(fill);
     const portraitFill = new THREE.DirectionalLight(
       timeOfDay === "night" ? "#ffe5be" : "#fff7e8",
-      indoor ? 0.18 : timeOfDay === "night" ? 0.52 : 0.16,
+      indoor ? 0.18 : timeOfDay === "night" ? 0.52 : 0.3,
     );
     portraitFill.position.copy(viewCamera);
     portraitFill.target.position.copy(viewTarget);
@@ -802,7 +876,7 @@ export default function World3D({
     if (!indoor) {
       const softAmbient = new THREE.AmbientLight(
         timeOfDay === "night" ? "#7390c4" : timeOfDay === "sunset" ? "#ffe1c8" : "#fff9e9",
-        timeOfDay === "night" ? 0.3 : timeOfDay === "sunset" ? 0.1 : 0.08,
+        timeOfDay === "night" ? 0.3 : timeOfDay === "sunset" ? 0.14 : 0.2,
       );
       world.add(softAmbient);
     }
@@ -811,19 +885,28 @@ export default function World3D({
       world.add(roomGlow);
     }
 
-    const town = createTown(location);
+    const town = createTown(location, environmentAssetsRef.current);
     town.group.visible = true;
     world.add(town.group);
+    const sceneObstacles = indoor
+      ? []
+      : town.obstacles ?? (location === "home" ? HOME_OBSTACLES : TOWN_OBSTACLES);
 
     const characterByGroup = new Map<THREE.Group, Character>();
     const characters: Character[] = profiles.map((profile, index) => {
-      const character = createCharacter(prepareProfile(profile));
+      const preparedProfile = prepareProfile(profile);
+      // V2 rebuild: the modular Sunny resident is the canonical character in
+      // both the world and creator. It is built around our life-sim turnaround
+      // instead of the mismatched anime GLBs used by the previous prototype.
+      const character = createCharacter(preparedProfile);
+      const residentSpritePack = residentSpritesRef.current;
+      if (residentSpritePack) attachResidentSprite(character, residentSpritePack);
       const start = composition.starts[index % composition.starts.length];
       character.group.position.copy(start);
       const sceneScale = location === "home"
         ? index === 0
-          ? 0.74
-          : 0.71 + (index % 2) * 0.012
+          ? 0.88
+          : 0.84 + (index % 2) * 0.012
         : index === 0
           ? indoor
             ? 0.56
@@ -854,16 +937,23 @@ export default function World3D({
       characterByGroup.set(character.group, character);
       return character;
     });
+    const openingResidentAnchors = characters.slice(0, 3).map((character) => ({
+      position: character.group.position.clone(),
+      yaw: character.group.rotation.y,
+    }));
 
     const selected = characters[0];
     const selectionRing = createSelectionRing();
     const nameTag = createNameTag(selected.profile.name);
+    const selectedTagHeight = Number(selected.group.userData.displayHeight) || 3.68;
+    nameTag.position.y = selectedTagHeight;
+    if (selected.assetRuntime) nameTag.scale.set(1.88, 0.58, 1);
     selected.group.add(selectionRing, nameTag);
 
     const definitions: ResidentDefinition[] = characters.map((character, index) => ({
       id: String(character.profile.id),
       group: character.group,
-      initialState: index === 0 ? "walk" : index % 3 === 2 ? "idle" : "walk",
+      initialState: index < 3 ? "idle" : index % 3 === 2 ? "idle" : "walk",
       targetPoints: composition.points,
       walkSpeed: (indoor ? 0.42 : 0.58) + (index % 3) * 0.05,
       runSpeed: (indoor ? 0.78 : 1.15) + (index % 2) * 0.1,
@@ -902,7 +992,10 @@ export default function World3D({
       },
       applyAnimation(group, state, elapsed, delta) {
         const character = characterByGroup.get(group);
-        if (character) updateCharacter(character, state as CharacterState, elapsed, delta);
+        if (character) {
+          updateCharacter(character, state as CharacterState, elapsed, delta);
+          updateResidentSprite(character, state as CharacterState, elapsed);
+        }
       },
     });
     director.camera?.cut(viewCamera, viewTarget, viewFov);
@@ -911,9 +1004,6 @@ export default function World3D({
     // every other resident continues their autonomous town routine.
     director.setControl(selected.group, { direction: [0, 0], run: false });
 
-    if (director.residents[1] && director.residents[2]) {
-      director.startConversation(director.residents[1], director.residents[2], 6.5);
-    }
     if (director.residents[3]) director.setState(director.residents[3], "eat", { duration: 5.6 });
     if (director.residents[4]) director.setState(director.residents[4], "sit", { duration: 6.2 });
     if (director.residents[5]) {
@@ -929,7 +1019,20 @@ export default function World3D({
     if (weather) world.add(weather.group);
 
     const clock = new THREE.Clock();
-    runtimeRef.current = { director, characters, clock, focus: null, controlMode: "auto" };
+    const seats = town.benches.flatMap((bench): SeatAnchor[] => {
+      const position = bench.userData.sitPosition;
+      if (!(position instanceof THREE.Vector3)) return [];
+      return [{ position: position.clone().setY(0), yaw: Number(bench.userData.sitYaw) || 0 }];
+    });
+    runtimeRef.current = {
+      director,
+      characters,
+      clock,
+      focus: null,
+      controlMode: "auto",
+      openingPortraitLocked: location === "home",
+      seats,
+    };
     const pressedKeys = new Set<string>();
     const movementKeys = new Set([
       "KeyW",
@@ -954,6 +1057,7 @@ export default function World3D({
         if (runtime?.director === director) {
           runtime.controlMode = "keyboard";
           runtime.focus = null;
+          runtime.openingPortraitLocked = false;
         }
       } else if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
         pressedKeys.add(event.code);
@@ -1016,6 +1120,7 @@ export default function World3D({
       if (runtime?.director === director) {
         runtime.controlMode = "pointer";
         runtime.focus = null;
+        runtime.openingPortraitLocked = false;
       }
       renderer.domElement.focus({ preventScroll: true });
     };
@@ -1107,14 +1212,26 @@ export default function World3D({
       } else {
         if (runtime?.focus) runtime.focus = null;
         if (location === "home" && !cinematicView) {
-          director.camera?.follow(selected.group, {
-            offset: [6, 3.8, 7.4],
-            targetOffset: [0, 1.25, 0],
-            offsetSpace: "world",
-            positionDamping: 2.6,
-            targetDamping: 5.2,
-            fov: 34,
-          });
+          // Preserve the authored street portrait until the player actually
+          // starts moving. Immediate follow mode used to crop the tree, house
+          // and side residents out of the opening frame.
+          if (runtime?.openingPortraitLocked) {
+            director.camera?.moveTo(viewCamera, viewTarget, {
+              duration: 0.25,
+              fov: viewFov,
+              positionDamping: 7.5,
+              targetDamping: 8.5,
+            });
+          } else {
+            director.camera?.follow(selected.group, {
+              offset: [1.45, 4.4, 10.5],
+              targetOffset: [0, 1.05, -2.4],
+              offsetSpace: "world",
+              positionDamping: 2.15,
+              targetDamping: 5.2,
+              fov: 32,
+            });
+          }
         } else {
           const driftScale = indoor ? 0.38 : 1;
           cameraDrift.set(
@@ -1150,9 +1267,25 @@ export default function World3D({
       }
       director.update(delta, elapsed);
 
-      const selectedGrounding = groundCharacterToPlane(selected);
+      if (location === "home" && runtime?.openingPortraitLocked && !focusActive) {
+        openingResidentAnchors.forEach((anchor, index) => {
+          const character = characters[index];
+          const resident = director.residents[index];
+          if (!character || !resident) return;
+          if (resident.state !== "idle") {
+            director.setState(resident, "idle", { duration: 2, reason: "opening-portrait" });
+          }
+          character.group.position.copy(anchor.position);
+          character.group.rotation.set(0, anchor.yaw, 0);
+          resident.velocity.set(0, 0, 0);
+        });
+      }
+
+      const selectedGrounding = groundIllustratedResident(selected)
+        ?? groundCharacterToPlane(selected);
       for (let index = 1; index < characters.length; index += 1) {
-        groundCharacterToPlane(characters[index]!);
+        const character = characters[index]!;
+        if (!groundIllustratedResident(character)) groundCharacterToPlane(character);
       }
 
       if (elapsed - lastDiagnosticAt >= 0.12) {
@@ -1191,6 +1324,13 @@ export default function World3D({
           ).toFixed(1);
           element.dataset.selectedSpeed = selectedResident.velocity.length().toFixed(3);
           element.dataset.playerControl = runtime?.controlMode ?? "auto";
+          element.dataset.characterSource = selected.assetRuntime?.source
+            ?? String(selected.group.userData.characterSource ?? "sunny-custom-v2");
+          element.dataset.characterVariant = String(
+            selected.group.userData.authoredVariant ?? "procedural",
+          );
+          element.dataset.characterAssetDiagnostics = "approved-illustrated-atlas-v1";
+          element.dataset.environmentSource = town.visualSource ?? "procedural";
           element.dataset.collisionClearance = Number.isFinite(collisionClearance)
             ? collisionClearance.toFixed(4)
             : "none";
@@ -1202,9 +1342,10 @@ export default function World3D({
 
       const pulse = 1 + Math.sin(elapsed * 3.2) * 0.09;
       selectionRing.scale.setScalar(pulse);
-      selectionRing.visible = !focusActive;
-      nameTag.visible = !focusActive;
-      nameTag.position.y = 3.68 + Math.sin(elapsed * 2.25) * 0.045;
+      const cleanOpeningPortrait = location === "home" && runtime?.openingPortraitLocked;
+      selectionRing.visible = !focusActive && !cleanOpeningPortrait;
+      nameTag.visible = !focusActive && !cleanOpeningPortrait;
+      nameTag.position.y = selectedTagHeight + Math.sin(elapsed * 2.25) * 0.035;
       atmosphere.children.forEach((petal, index) => {
         const phase = Number(petal.userData.phase) || index;
         const baseY = Number(petal.userData.baseY) || 1;
@@ -1258,7 +1399,16 @@ export default function World3D({
       renderer.forceContextLoss();
       element.replaceChildren();
     };
-  }, [scene, selectedId, residentAppearanceKey, timeOfDay, weatherMode, cinematicView]);
+  }, [
+    scene,
+    selectedId,
+    residentAppearanceKey,
+    timeOfDay,
+    weatherMode,
+    cinematicView,
+    environmentAssetsSettled,
+    residentSpritesSettled,
+  ]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -1271,6 +1421,7 @@ export default function World3D({
     }
 
     runtime.controlMode = "auto";
+    runtime.openingPortraitLocked = false;
     director.setControl(selected, null);
     const duration = actionCue.kind === "talk" ? 30 : actionCue.kind === "rest" ? 6.4 : 5.2;
     runtime.focus = { kind: actionCue.kind, until: runtime.clock.elapsedTime + duration };
@@ -1295,6 +1446,11 @@ export default function World3D({
     } else if (actionCue.kind === "food") {
       director.setState(selected, "eat", { duration: 5.8, reason: "player-action" });
     } else if (actionCue.kind === "rest") {
+      const seat = runtime.seats[0];
+      if (seat) {
+        selected.group.position.copy(seat.position);
+        selected.group.rotation.set(0, seat.yaw, 0);
+      }
       director.setState(selected, "sit", { duration: 6.4, reason: "player-action" });
     } else if (actionCue.kind === "play") {
       director.setState(selected, "happy", { duration: 4.2, reason: "player-action" });

@@ -1,0 +1,20 @@
+Quaternius town asset subset
+============================
+
+The models in `medieval/` are derived from the free Standard edition of
+Quaternius' Medieval Village MegaKit:
+https://quaternius.com/packs/medievalvillagemegakit.html
+
+The models in `nature/` are derived from the free Standard edition of
+Quaternius' Stylized Nature MegaKit:
+https://quaternius.com/packs/stylizednaturemegakit.html
+
+Original models by Quaternius (@Quaternius).
+
+License: CC0 1.0 Universal (CC0 1.0), Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+For this project, the selected source glTF models and their PBR textures were
+repacked as self-contained GLB files. Textures were resized to at most 512 px
+and encoded as WebP. Geometry is not Draco- or Meshopt-compressed, so no
+additional geometry decoder is required at runtime.
