@@ -5,6 +5,7 @@ import CharacterPreview3D from "./CharacterPreview3D";
 import LifeSystemUI, { type PlayerSettings } from "./LifeSystemUI";
 import World3D from "./World3D";
 import { playGameSound } from "./game/audio";
+import type { CharacterProfile } from "./game/characters";
 import {
   ACTIVITY_CATALOG,
   ITEM_CATALOG,
@@ -47,9 +48,27 @@ type StyleOption = { value: number; label: string; glyph: string };
 
 const starterPeople: Person[] = [
   { id: 1, name: "小满", color: "#efb18e", hair: "#70422d", shirt: "#e3ad3f", hairStyle: 6, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 82, food: 61, energy: 74, friend: 45, trait: "天马行空", dream: "在广场举办一场演唱会" },
-  { id: 2, name: "阿奇", color: "#efb18e", hair: "#201b19", shirt: "#54a98e", hairStyle: 8, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 66, food: 78, energy: 48, friend: 45, trait: "热情冒险", dream: "做出全城最好吃的蛋包饭" },
+  { id: 2, name: "阿奇", color: "#efb18e", hair: "#5f392b", shirt: "#6f8f43", hairStyle: 8, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 2, mood: 66, food: 78, energy: 48, friend: 45, trait: "热情冒险", dream: "做出全城最好吃的蛋包饭" },
   { id: 3, name: "露露", color: "#ffd0a6", hair: "#e1b84b", shirt: "#7ca9d6", hairStyle: 1, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 3, mood: 74, food: 52, energy: 88, friend: 32, trait: "温柔细腻", dream: "交到三个真正的好朋友" },
 ];
+
+function characterProfileForPerson(person: Person): CharacterProfile {
+  return {
+    id: person.id,
+    name: person.name,
+    skin: person.color,
+    hair: person.hair,
+    shirt: person.shirt || "#ef735f",
+    hairStyle: person.hairStyle ?? 0,
+    faceShape: person.faceShape ?? 0,
+    eyeStyle: person.eyeStyle ?? 0,
+    browStyle: person.browStyle ?? 0,
+    noseStyle: person.noseStyle ?? 0,
+    mouthStyle: person.mouthStyle ?? 0,
+    outfitStyle: person.outfitStyle ?? 0,
+    trait: person.trait,
+  };
+}
 
 const scenes = [
   { id: "home", icon: "⌂", name: "阳光街区", hint: "回家、拜访与庭院生活" },
@@ -59,35 +78,11 @@ const scenes = [
   { id: "interior", icon: "▣", name: "我的房间", hint: "布置家园与室内互动" },
 ] as const;
 
-const hairOptions: StyleOption[] = [
-  ["利落短发", "◒"], ["齐肩波波", "◖"], ["精灵短发", "✦"], ["自然卷", "❀"],
-  ["高马尾", "➶"], ["双马尾", "♬"], ["丸子头", "●"], ["麻花辫", "⌇"],
-  ["飞机头", "⌁"], ["铲青短发", "◩"], ["长直发", "▥"], ["爆炸卷", "∞"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
-const faceOptions: StyleOption[] = [
-  ["圆润", "●"], ["鹅蛋", "⬭"], ["方圆", "▢"], ["心形", "♡"], ["小巧", "◌"], ["宽脸", "⬯"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
-const eyeOptions: StyleOption[] = [
-  ["自然", "● ●"], ["圆眼", "○ ○"], ["星眸", "✦ ✦"], ["杏眼", "◉ ◉"],
-  ["笑眼", "⌒ ⌒"], ["慵懒", "︶ ︶"], ["豆豆", "• •"], ["温柔", "◡ ◡"],
-  ["猫眼", "◖ ◗"], ["无辜", "◕ ◔"], ["认真", "— —"], ["睫毛", "✧ ✧"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
-const browOptions: StyleOption[] = [
-  ["柔和", "⌒"], ["平直", "━"], ["弯眉", "⌃"], ["浓眉", "へ"],
-  ["好奇", "╱"], ["温顺", "﹏"], ["坚定", "ハ"], ["短眉", "—"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
-const noseOptions: StyleOption[] = [
-  ["纽扣鼻", "•"], ["小鼻", "·"], ["圆鼻", "●"], ["柔和三角", "▴"], ["短线", "╵"],
-  ["细长", "│"], ["翘鼻", "⌝"], ["宽鼻", "⌑"], ["雀斑鼻", "∴"], ["尖鼻", "△"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
-const mouthOptions: StyleOption[] = [
-  ["微笑", "⌣"], ["灿烂笑", "▽"], ["小嘴", "ᴗ"], ["惊讶", "O"], ["猫嘴", "ω"],
-  ["嘟嘴", "○"], ["露齿笑", "▱"], ["平静", "—"], ["大笑", "D"], ["酒窝笑", "⌁"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
-const outfitOptions: StyleOption[] = [
-  ["休闲T恤", "T"], ["背带装", "H"], ["夹克", "外"], ["连衣裙", "裙"],
-  ["运动装", "动"], ["针织衫", "织"], ["水手服", "海"], ["连帽衫", "帽"],
-].map(([label, glyph], value) => ({ value, label, glyph }));
+const illustratedPresetOptions: StyleOption[] = [
+  { value: 0, label: "清爽短发夹克", glyph: "少" },
+  { value: 1, label: "丸子头花衬衫", glyph: "花" },
+  { value: 2, label: "金色波波裙装", glyph: "裙" },
+];
 
 const WEATHER_SLOT_MINUTES = 180;
 const DEFAULT_SETTINGS: PlayerSettings = { sound: true, hints: true, reducedEffects: false };
@@ -229,7 +224,9 @@ export default function Home() {
       if (saved) {
         try {
           const parsed = JSON.parse(saved) as Partial<{ people: Person[]; coins: number; day: number; log: string[]; firstPlayedDay: number; weatherSeed: number; lastProcessedDay: number }>;
-          if (Array.isArray(parsed.people) && parsed.people.length > 0) setPeople(parsed.people);
+          if (Array.isArray(parsed.people) && parsed.people.length > 0) {
+            setPeople(parsed.people);
+          }
           if (typeof parsed.coins === "number") legacyCoins = parsed.coins;
           if (Array.isArray(parsed.log)) setStoryLog(parsed.log);
           const oldDay = Math.max(1, typeof parsed.day === "number" ? parsed.day : 1);
@@ -319,22 +316,11 @@ export default function Home() {
   const person = people.find((candidate) => candidate.id === selected) || people[0];
   const activeScene = scenes.find((item) => item.id === scene) || scenes[0];
   const relationshipAffinity = lifeState.relationships[String(person.id)]?.affinity ?? person.friend;
-  const worldResidents = useMemo(() => people.map((resident) => ({
-    id: resident.id,
-    name: resident.name,
-    skin: resident.color,
-    hair: resident.hair,
-    shirt: resident.shirt || "#ef735f",
-    hairStyle: resident.hairStyle ?? 0,
-    faceShape: resident.faceShape ?? 0,
-    eyeStyle: resident.eyeStyle ?? 0,
-    browStyle: resident.browStyle ?? 0,
-    noseStyle: resident.noseStyle ?? 0,
-    mouthStyle: resident.mouthStyle ?? 0,
-    outfitStyle: resident.outfitStyle ?? 0,
-    trait: resident.trait,
-  })), [people]);
-  const previewProfile = useMemo(() => ({
+  const worldResidents = useMemo(
+    () => people.map(characterProfileForPerson),
+    [people],
+  );
+  const previewProfile = useMemo<CharacterProfile>(() => ({
     id: "creator-preview",
     name: name.trim() || "新居民",
     skin: newSkin,
@@ -349,6 +335,31 @@ export default function Home() {
     outfitStyle: newOutfitStyle,
     trait: newTrait,
   }), [name, newSkin, newHair, newShirt, newHairStyle, newFaceShape, newEyeStyle, newBrowStyle, newNoseStyle, newMouthStyle, newOutfitStyle, newTrait]);
+
+  const illustratedPreset = newHairStyle === 1 || newOutfitStyle === 3
+    ? 2
+    : newHairStyle === 6
+      ? 1
+      : 0;
+  const chooseIllustratedPreset = (value: number) => {
+    if (value === 2) {
+      setNewHairStyle(1);
+      setNewOutfitStyle(3);
+    } else if (value === 1) {
+      setNewHairStyle(6);
+      setNewOutfitStyle(2);
+    } else {
+      setNewHairStyle(8);
+      setNewOutfitStyle(2);
+    }
+    // The current polished atlas uses one coherent face design. Unsupported
+    // fake controls were removed until their authored frames exist.
+    setNewFaceShape(0);
+    setNewEyeStyle(0);
+    setNewBrowStyle(0);
+    setNewNoseStyle(0);
+    setNewMouthStyle(0);
+  };
 
   const notify = (text: string) => {
     setToast(text);
@@ -539,7 +550,7 @@ export default function Home() {
       {showCreate && <div className="modal-bg" onMouseDown={() => setShowCreate(false)}><div className="modal creator-v2" role="dialog" aria-modal="true" aria-labelledby="creator-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="close" onClick={() => setShowCreate(false)} aria-label="关闭居民设计室">×</button>
         <section className="creator-preview-pane">
-          <div className="creator-intro"><small>晴天市 · 居民设计室</small><h2 id="creator-title">创造你的 3D 居民</h2><p>选择会立即反映到真实游戏模型中。转动角色，确认正面与侧面的细节。</p></div>
+          <div className="creator-intro"><small>晴天市 · 居民设计室</small><h2 id="creator-title">创造你的高清居民</h2><p>预览与街区使用同一角色资产。选择造型与配色，再检查正面、侧面和背面。</p></div>
           <CharacterPreview3D profile={previewProfile} />
           <label className="name-field">居民名字<input autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && !event.nativeEvent.isComposing && createPerson()} placeholder="给居民起个名字" maxLength={8}/></label>
           <label className="trait-field">性格<select value={newTrait} onChange={(event) => setNewTrait(event.target.value)}><option>天马行空</option><option>热情冒险</option><option>温柔细腻</option><option>冷静可靠</option><option>幽默淘气</option></select></label>
@@ -551,13 +562,7 @@ export default function Home() {
             <fieldset className="swatch-picker"><legend>发色</legend><div>{["#201b19","#70422d","#c95c69","#e1b84b","#315a72","#704d91","#d9d2c7"].map((color) => <button type="button" aria-label={`选择发色 ${color}`} aria-pressed={newHair === color} className={newHair === color ? "picked" : ""} key={color} onClick={() => setNewHair(color)} style={{background:color}} />)}</div></fieldset>
             <fieldset className="swatch-picker"><legend>服装颜色</legend><div>{["#ef735f","#54a98e","#7b65d1","#e3ad3f","#4c79ad","#e582aa","#384b61"].map((color) => <button type="button" aria-label={`选择服装颜色 ${color}`} aria-pressed={newShirt === color} className={newShirt === color ? "picked" : ""} key={color} onClick={() => setNewShirt(color)} style={{background:color}} />)}</div></fieldset>
           </div>
-          <StylePicker title="发型" options={hairOptions} value={newHairStyle} onChange={setNewHairStyle}/>
-          <StylePicker title="脸型" options={faceOptions} value={newFaceShape} onChange={setNewFaceShape}/>
-          <StylePicker title="眼睛" options={eyeOptions} value={newEyeStyle} onChange={setNewEyeStyle}/>
-          <StylePicker title="眉毛" options={browOptions} value={newBrowStyle} onChange={setNewBrowStyle}/>
-          <StylePicker title="鼻子" options={noseOptions} value={newNoseStyle} onChange={setNewNoseStyle}/>
-          <StylePicker title="嘴巴" options={mouthOptions} value={newMouthStyle} onChange={setNewMouthStyle}/>
-          <StylePicker title="服装款式" options={outfitOptions} value={newOutfitStyle} onChange={setNewOutfitStyle}/>
+          <StylePicker title="高清造型" options={illustratedPresetOptions} value={illustratedPreset} onChange={chooseIllustratedPreset}/>
         </section>
       </div></div>}
     </main>

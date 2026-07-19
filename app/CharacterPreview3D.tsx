@@ -8,15 +8,27 @@ import {
   type Character,
   type CharacterProfile,
 } from "./game/characters";
+import {
+  attachResidentSprite,
+  preloadResidentSprites,
+  setResidentSpriteView,
+  updateResidentSprite,
+} from "./game/residentSprites";
 
 type Props = {
   profile: CharacterProfile;
 };
 
 function disposeCharacter(character: Character): void {
+  character.assetRuntime?.mixer.stopAllAction();
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
   character.group.traverse((object) => {
+    if (object instanceof THREE.Sprite) {
+      const list = Array.isArray(object.material) ? object.material : [object.material];
+      for (const item of list) materials.add(item);
+      return;
+    }
     if (!(object instanceof THREE.Mesh)) return;
     if (!object.geometry.userData.sharedCharacterAsset) geometries.add(object.geometry);
     const list = Array.isArray(object.material) ? object.material : [object.material];
@@ -41,15 +53,17 @@ export default function CharacterPreview3D({ profile }: Props) {
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 30);
-    camera.position.set(0, 2.15, 6.35);
-    camera.lookAt(0, 1.85, 0);
+    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 30);
+    // Frame the entire resident from shoes to hair. The earlier high target
+    // centred on the face and pushed the body below the fitting-room viewport.
+    camera.position.set(0, 1.72, 5.35);
+    camera.lookAt(0, 1.22, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.04;
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.18;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mount.appendChild(renderer.domElement);
@@ -93,6 +107,8 @@ export default function CharacterPreview3D({ profile }: Props) {
       const character = characterRef.current;
       if (character) {
         updateCharacter(character, "idle", time, delta);
+        setResidentSpriteView(character, rotationRef.current);
+        updateResidentSprite(character, "idle", time);
         character.group.rotation.y = THREE.MathUtils.lerp(
           character.group.rotation.y,
           rotationRef.current + Math.sin(time * 0.55) * 0.06,
@@ -121,21 +137,31 @@ export default function CharacterPreview3D({ profile }: Props) {
   }, []);
 
   useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene) return;
-    if (characterRef.current) {
-      scene.remove(characterRef.current.group);
-      disposeCharacter(characterRef.current);
-    }
-    const character = createCharacter(profile);
-    character.group.scale.setScalar(0.82);
-    character.group.position.y = 0;
-    character.group.rotation.y = rotationRef.current;
-    character.group.traverse((object) => {
-      if (object instanceof THREE.Mesh) object.castShadow = true;
+    let active = true;
+    preloadResidentSprites().then((pack) => {
+      const scene = sceneRef.current;
+      if (!active || !scene) return;
+      if (characterRef.current) {
+        scene.remove(characterRef.current.group);
+        disposeCharacter(characterRef.current);
+      }
+      const character = createCharacter(profile);
+      attachResidentSprite(character, pack);
+      character.group.scale.setScalar(0.82);
+      character.group.position.y = 0;
+      character.group.rotation.y = 0;
+      setResidentSpriteView(character, rotationRef.current);
+      scene.add(character.group);
+      characterRef.current = character;
+      if (mountRef.current) {
+        mountRef.current.dataset.characterVariant = String(
+          character.group.userData.authoredVariant ?? "illustrated",
+        );
+      }
     });
-    scene.add(character.group);
-    characterRef.current = character;
+    return () => {
+      active = false;
+    };
   }, [profile]);
 
   const turn = (amount: number) => {
@@ -152,7 +178,7 @@ export default function CharacterPreview3D({ profile }: Props) {
       />
       <div className="preview-turner" aria-label="旋转角色预览">
         <button type="button" onClick={() => turn(-Math.PI / 4)} aria-label="向左旋转角色">↶</button>
-        <span>实时 3D</span>
+        <span>高清角色</span>
         <button type="button" onClick={() => turn(Math.PI / 4)} aria-label="向右旋转角色">↷</button>
       </div>
     </div>

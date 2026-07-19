@@ -79,6 +79,22 @@ export interface Character {
   skeleton: THREE.Skeleton;
   profile: CharacterProfile;
   animation: CharacterAnimation;
+  /** Optional authored, skinned visual. Procedural residents leave this unset. */
+  assetRuntime?: CharacterAssetRuntime;
+}
+
+export interface CharacterAssetRuntime {
+  source: "chibi-gltf";
+  mixer: THREE.AnimationMixer;
+  actions: Partial<Record<CharacterState, THREE.AnimationAction>>;
+  activeAction: THREE.AnimationAction | null;
+  visualRoot: THREE.Group;
+  leftFoot: THREE.Bone;
+  rightFoot: THREE.Bone;
+  /** Local child markers follow the animated foot rotation in world space. */
+  leftSoleMarker: THREE.Object3D;
+  rightSoleMarker: THREE.Object3D;
+  displayHeight: number;
 }
 
 type CharacterMaterial = THREE.MeshStandardMaterial;
@@ -180,6 +196,87 @@ function createRoundedShortsGeometry(): THREE.BufferGeometry {
   });
 }
 
+/**
+ * One softly tapered, fully rounded limb surface.  The old resident used a
+ * stack of capsules, cylinders and joint spheres; even with smooth normals the
+ * repeated circular breaks read as a wooden doll.  This geometry has no flat
+ * cut face and is deliberately allowed to overlap its neighbouring segment so
+ * elbows and knees stay visually closed while their bones rotate.
+ */
+function createOrganicSegmentGeometry(
+  key: string,
+  topY: number,
+  bottomY: number,
+  topRadius: number,
+  middleRadius: number,
+  bottomRadius: number,
+  depth = 0.92,
+): THREE.BufferGeometry {
+  return cachedGeometry(`organic-segment-v2:${key}`, () => {
+    const geometry = new THREE.SphereGeometry(1, 32, 24);
+    const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    for (let index = 0; index < position.count; index += 1) {
+      const x = position.getX(index);
+      const sourceY = position.getY(index);
+      const z = position.getZ(index);
+      const u = THREE.MathUtils.clamp((sourceY + 1) * 0.5, 0, 1);
+      const lowerRadius = THREE.MathUtils.lerp(bottomRadius, middleRadius, u * 2);
+      const upperRadius = THREE.MathUtils.lerp(middleRadius, topRadius, (u - 0.5) * 2);
+      const radius = u < 0.5 ? lowerRadius : upperRadius;
+      position.setXYZ(
+        index,
+        x * radius,
+        THREE.MathUtils.lerp(bottomY, topY, u),
+        z * radius * depth,
+      );
+    }
+    position.needsUpdate = true;
+    geometry.computeVertexNormals();
+    return geometry;
+  });
+}
+
+/** A single rounded shoe upper, replacing the former collar/body/toe stack. */
+function createSoftShoeGeometry(): THREE.BufferGeometry {
+  return cachedGeometry("shoe-one-piece-v2", () => {
+    const geometry = new THREE.SphereGeometry(1, 32, 22);
+    const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    for (let index = 0; index < position.count; index += 1) {
+      const x = position.getX(index);
+      const y = position.getY(index);
+      const z = position.getZ(index);
+      const toe = THREE.MathUtils.smoothstep(z, -0.18, 0.9);
+      const underside = y < -0.42 ? THREE.MathUtils.lerp(y, -0.58, 0.48) : y;
+      position.setXYZ(
+        index,
+        x * (0.126 + toe * 0.018),
+        underside * (0.095 + toe * 0.006),
+        z * (z > 0 ? 0.2 : 0.145) + 0.1,
+      );
+    }
+    position.needsUpdate = true;
+    geometry.computeVertexNormals();
+    return geometry;
+  });
+}
+
+function createSoftSkirtGeometry(): THREE.BufferGeometry {
+  return cachedGeometry("dress-soft-skirt-v2", () => {
+    const profile = [
+      new THREE.Vector2(0, -0.34),
+      new THREE.Vector2(0.54, -0.34),
+      new THREE.Vector2(0.59, -0.29),
+      new THREE.Vector2(0.565, -0.16),
+      new THREE.Vector2(0.47, 0.21),
+      new THREE.Vector2(0.38, 0.3),
+      new THREE.Vector2(0, 0.3),
+    ];
+    const geometry = new THREE.LatheGeometry(profile, 36);
+    geometry.computeVertexNormals();
+    return geometry;
+  });
+}
+
 /** A tapered, asymmetric lock reads as illustrated hair instead of a rod. */
 function createHairLockGeometry(kind: "front" | "side"): THREE.BufferGeometry {
   return cachedGeometry(`hair-painted-lock-v6:${kind}`, () => {
@@ -275,41 +372,44 @@ function material(
 
   const base = {
     color: resolvedColor,
-    // A tiny self-lit contribution keeps the painted colours readable under
-    // evening street lights without making the resident look glossy or waxy.
+    // Keep colours readable after sunset, but retain enough diffuse modelling
+    // to separate skin, cloth and hair.  Strong self-lighting made every part
+    // look as though it was cut from the same painted material.
     emissive: resolvedColor,
     emissiveIntensity:
-      surface === "skin" ? 0.045
-        : surface === "fabric" ? 0.026
-          : surface === "hair" ? 0.015
-            : 0.01,
+      surface === "skin" ? 0.018
+        : surface === "hair" ? 0.008
+          : surface === "fabric" ? 0.003
+            : 0.006,
     side: options.side ?? THREE.FrontSide,
     transparent: options.transparent ?? false,
     opacity: options.opacity ?? 1,
     metalness: 0,
+    flatShading: false,
   };
 
   let result: CharacterMaterial;
   switch (surface) {
     case "skin":
-      // Standard diffuse shading keeps the face soft and readable. Physical
-      // sheen/clearcoat made the large cheeks catch broad plastic highlights,
-      // which was the biggest contributor to the clay-doll appearance.
+      // A broad, weak highlight gives skin volume without wax/clearcoat glare.
       result = new THREE.MeshStandardMaterial({
         ...base,
-        roughness: 0.94,
+        roughness: 0.86,
+        envMapIntensity: 0.2,
       });
       break;
     case "fabric":
       result = new THREE.MeshStandardMaterial({
         ...base,
-        roughness: 1,
+        roughness: 0.99,
+        envMapIntensity: 0.06,
       });
       break;
     case "leather":
       result = new THREE.MeshStandardMaterial({
         ...base,
-        roughness: 0.72,
+        roughness: 0.78,
+        envMapIntensity: 0.24,
       });
       break;
     case "eye":
@@ -321,11 +421,19 @@ function material(
       });
       break;
     case "hair":
-      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.88 });
+      result = new THREE.MeshStandardMaterial({
+        ...base,
+        roughness: 0.92,
+        envMapIntensity: 0.11,
+      });
       break;
     case "detail":
     default:
-      result = new THREE.MeshStandardMaterial({ ...base, roughness: 0.76 });
+      result = new THREE.MeshStandardMaterial({
+        ...base,
+        roughness: 0.9,
+        envMapIntensity: 0.1,
+      });
       break;
   }
   result.userData.sharedCharacterAsset = true;
@@ -780,9 +888,8 @@ function addOutfit(
       addMesh(torso, cachedGeometry("jacket-button", () => new THREE.SphereGeometry(0.026, 14, 9)), shirtAccent, [0.045, y, 0.393], [1, 1, 0.42]);
     }
   } else if (includesAny(outfit, ["dress", "skirt"])) {
-    addMesh(hips, cachedGeometry("dress-skirt", () => new THREE.CylinderGeometry(0.43, 0.68, 0.56, 28)), shirtMaterial, [0, -0.05, 0], [1, 1, 0.86]);
-    addMesh(hips, cachedGeometry("dress-hem", () => new THREE.CylinderGeometry(0.69, 0.69, 0.07, 28)), shirtAccent, [0, -0.32, 0], [1, 1, 0.86]);
-    addMesh(torso, cachedGeometry("dress-belt", () => new THREE.BoxGeometry(0.78, 0.08, 0.06)), shirtAccent, [0, -0.31, 0.36]);
+    addMesh(hips, createSoftSkirtGeometry(), shirtMaterial, [0, -0.02, 0], [1, 1, 0.86]);
+    addMesh(torso, cachedGeometry("dress-belt-v2", () => new THREE.TorusGeometry(0.335, 0.025, 8, 32)), shirtAccent, [0, -0.31, 0], [1.02, 1, 0.81], [90 * DEG, 0, 0]);
   } else if (includesAny(outfit, ["sport", "athletic", "active"])) {
     addMesh(torso, cachedGeometry("sport-stripe-v6", () => new THREE.CapsuleGeometry(0.026, 0.62, 5, 12)), shirtAccent, [0.27, -0.03, 0.355], [1, 1, 0.22]);
     addMesh(torso, cachedGeometry("sport-number", () => new THREE.CircleGeometry(0.13, 28)), shirtAccent, [0, 0.03, 0.366], [1, 1, 1]);
@@ -834,35 +941,54 @@ function addArm(
   const shoulder = boneJoint(chest, `${sideName}-shoulder`, side * 0.43, 0.22, 0);
   const arm = boneJoint(shoulder, `${sideName}-upper-arm`, 0, 0, 0);
   const longSleeve = includesAny(outfitStyle, ["jacket", "sweater", "hoodie", "coat"]);
+  // One continuous sleeve envelope reaches into the torso at the shoulder and
+  // rounds over the cuff.  There is no visible shoulder ball or cylinder end.
   addMesh(
     arm,
-    cachedGeometry("sleeve-shoulder-cap-v4", () => new THREE.SphereGeometry(0.135, 18, 12)),
+    createOrganicSegmentGeometry(
+      longSleeve ? "upper-sleeve-long" : "upper-sleeve-short",
+      0.13,
+      longSleeve ? -0.37 : -0.32,
+      0.175,
+      longSleeve ? 0.125 : 0.13,
+      longSleeve ? 0.105 : 0.11,
+      0.9,
+    ),
     shirtMaterial,
-    [0, -0.045, 0],
-    [1.05, 0.88, 0.92],
+    [0, 0, 0],
   );
-  addMesh(arm, cachedGeometry("arm-upper-rounded-v5", () => new THREE.CapsuleGeometry(0.098, 0.145, 7, 20)), shirtMaterial, [0, -0.16, 0]);
-  addMesh(
-    arm,
-    cachedGeometry("sleeve-piping-v4", () => new THREE.TorusGeometry(0.103, 0.012, 6, 18)),
-    shirtAccent,
-    [0, -0.285, 0],
-    [1, 0.84, 1],
-    [90 * DEG, 0, 0],
-  );
-  addMesh(arm, cachedGeometry("sleeve-cuff-chibi", () => new THREE.CylinderGeometry(0.116, 0.116, 0.065, 18)), shirtAccent, [0, -0.31, 0]);
 
-  const forearm = boneJoint(arm, `${sideName}-forearm`, 0, -0.34, 0);
-  addMesh(forearm, cachedGeometry("arm-forearm-rounded-v5", () => new THREE.CapsuleGeometry(0.082, 0.15, 7, 20)), longSleeve ? shirtMaterial : skinMaterial, [0, -0.155, 0]);
-  if (longSleeve) addMesh(forearm, cachedGeometry("wrist-cuff-chibi", () => new THREE.CylinderGeometry(0.093, 0.093, 0.065, 18)), shirtAccent, [0, -0.3, 0]);
-  const hand = boneJoint(forearm, `${sideName}-hand`, 0, -0.34, 0);
-  addMesh(hand, cachedGeometry("hand-palm-chibi", () => new THREE.SphereGeometry(0.112, 18, 13)), skinMaterial, [0, -0.045, 0.01], [0.94, 1.02, 0.78]);
+  const forearm = boneJoint(arm, `${sideName}-forearm`, 0, -0.3, 0);
+  addMesh(
+    forearm,
+    createOrganicSegmentGeometry(
+      longSleeve ? "forearm-sleeve" : "forearm-skin",
+      0.075,
+      -0.325,
+      longSleeve ? 0.11 : 0.098,
+      longSleeve ? 0.096 : 0.09,
+      longSleeve ? 0.086 : 0.082,
+      0.9,
+    ),
+    longSleeve ? shirtMaterial : skinMaterial,
+  );
+  // A soft woven cuff sits over the skin/hand overlap rather than exposing a
+  // circular cut plane at the wrist.
+  if (longSleeve) {
+    addMesh(
+      forearm,
+      createOrganicSegmentGeometry("wrist-cuff", -0.235, -0.35, 0.094, 0.092, 0.084, 0.9),
+      shirtAccent,
+    );
+  }
+  const hand = boneJoint(forearm, `${sideName}-hand`, 0, -0.29, 0);
+  addMesh(hand, cachedGeometry("hand-palm-smooth-v2", () => new THREE.SphereGeometry(0.112, 28, 20)), skinMaterial, [0, -0.04, 0.012], [0.92, 1.08, 0.8]);
   addMesh(
     hand,
-    cachedGeometry("hand-thumb-chibi", () => new THREE.CapsuleGeometry(0.029, 0.045, 4, 10)),
+    createOrganicSegmentGeometry("hand-thumb", 0.035, -0.09, 0.034, 0.031, 0.021, 0.82),
     skinMaterial,
-    [-side * 0.076, -0.036, 0.045],
-    [0.9, 1, 0.86],
+    [-side * 0.076, -0.025, 0.045],
+    [0.9, 0.82, 0.86],
     [0, 0, side * 24 * DEG],
   );
   return { shoulder, arm, forearm, hand };
@@ -877,36 +1003,42 @@ function addLeg(
   outfitStyle: string | number,
 ): { leg: THREE.Bone; shin: THREE.Bone; foot: THREE.Bone } {
   const sideName = side < 0 ? "left" : "right";
-  const leg = boneJoint(hips, `${sideName}-upper-leg`, side * 0.205, -0.14, 0);
+  const leg = boneJoint(hips, `${sideName}-upper-leg`, side * 0.205, -0.12, 0);
   const resolvedOutfit = resolveStyle(outfitStyle, OUTFIT_STYLES, "tee");
   const dress = includesAny(resolvedOutfit, ["dress", "skirt"]);
-  const upperMaterial = dress ? skinMaterial : trouserMaterial;
-  addMesh(leg, cachedGeometry("leg-upper-rounded-v5", () => new THREE.CapsuleGeometry(0.122, 0.18, 7, 20)), upperMaterial, [0, -0.2, 0]);
+  // Bare, softly tapered legs continue beneath the clothing.  The garment is
+  // a slightly wider overlay, so the hip and knee pivots never reveal a hole.
+  addMesh(
+    leg,
+    createOrganicSegmentGeometry("upper-leg-skin", 0.105, -0.44, 0.132, 0.119, 0.106, 0.92),
+    skinMaterial,
+  );
   if (!dress) {
-    addMesh(leg, cachedGeometry("shorts-cuff-v6", () => new THREE.TorusGeometry(0.122, 0.015, 6, 20)), trouserMaterial, [0, -0.34, 0], [1.04, 1, 0.96], [90 * DEG, 0, 0]);
+    addMesh(
+      leg,
+      createOrganicSegmentGeometry("shorts-leg-overlay", 0.13, -0.16, 0.158, 0.154, 0.136, 0.92),
+      trouserMaterial,
+    );
   }
 
-  const shin = boneJoint(leg, `${sideName}-shin`, 0, -0.42, 0);
+  const shin = boneJoint(leg, `${sideName}-shin`, 0, -0.38, 0);
   addMesh(
     shin,
-    cachedGeometry("knee-soft-v4", () => new THREE.SphereGeometry(0.118, 16, 11)),
+    createOrganicSegmentGeometry("lower-leg-skin", 0.115, -0.35, 0.116, 0.104, 0.092, 0.92),
     skinMaterial,
-    [0, -0.012, 0.012],
-    [1.02, 0.78, 0.9],
   );
-  addMesh(shin, cachedGeometry("leg-shin-rounded-v5", () => new THREE.CapsuleGeometry(0.101, 0.185, 7, 20)), skinMaterial, [0, -0.18, 0]);
   const sockMaterial = material("#f7f1e6", { surface: "fabric" });
-  addMesh(shin, cachedGeometry("sock-cuff-v6", () => new THREE.CylinderGeometry(0.108, 0.104, 0.13, 20)), sockMaterial, [0, -0.315, 0]);
-  addMesh(shin, cachedGeometry("sock-rib-v6", () => new THREE.TorusGeometry(0.106, 0.012, 6, 20)), material("#e7dece", { surface: "fabric" }), [0, -0.255, 0], [1, 1, 0.96], [90 * DEG, 0, 0]);
-  addMesh(shin, cachedGeometry("shoe-collar-chibi-v6", () => new THREE.CylinderGeometry(0.111, 0.106, 0.105, 20)), shoeMaterial, [0, -0.365, 0]);
+  addMesh(
+    shin,
+    createOrganicSegmentGeometry("sock-overlay", -0.17, -0.37, 0.104, 0.1, 0.094, 0.92),
+    sockMaterial,
+  );
 
-  const foot = boneJoint(shin, `${sideName}-foot`, 0, -0.4, 0.07);
-  addMesh(foot, cachedGeometry("shoe-upper-chibi", () => new THREE.CapsuleGeometry(0.105, 0.15, 6, 16)), shoeMaterial, [0, -0.012, 0.085], [1.08, 1, 1], [90 * DEG, 0, 0]);
-  addMesh(foot, cachedGeometry("shoe-toe-chibi", () => new THREE.SphereGeometry(0.116, 18, 12)), shoeMaterial, [0, -0.018, 0.235], [1.08, 0.74, 1.08]);
-  addMesh(foot, cachedGeometry("shoe-sole-rounded-v6", () => new THREE.CapsuleGeometry(0.105, 0.14, 6, 18)), material("#4b382c", { surface: "leather" }), [0, -0.09, 0.1], [1.15, 0.26, 1], [90 * DEG, 0, 0]);
+  const foot = boneJoint(shin, `${sideName}-foot`, 0, -0.33, 0.045);
+  addMesh(foot, createSoftShoeGeometry(), shoeMaterial, [0, -0.015, 0]);
   const laceMaterial = material("#eadfca", { surface: "fabric" });
-  for (const z of [0.095, 0.155]) {
-    addMesh(foot, cachedGeometry("shoe-lace-rounded-v6", () => new THREE.CapsuleGeometry(0.007, 0.085, 3, 8)), laceMaterial, [0, 0.067, z], [1, 1, 0.45], [0, 0, 90 * DEG]);
+  for (const z of [0.105, 0.16]) {
+    addMesh(foot, cachedGeometry("shoe-lace-soft-v2", () => new THREE.CapsuleGeometry(0.006, 0.075, 4, 12)), laceMaterial, [0, 0.068, z], [1, 1, 0.36], [0, 0, 90 * DEG]);
   }
   return { leg, shin, foot };
 }
@@ -961,6 +1093,8 @@ function createHeadGeometry(faceStyle: string): THREE.BufferGeometry {
 export function createCharacter(profile: CharacterProfile): Character {
   const group = new THREE.Group();
   group.name = `character:${profile.id}`;
+  group.userData.characterSource = "sunny-custom-v2";
+  group.userData.authoredVariant = "custom";
   group.userData.characterId = profile.id;
   group.userData.characterName = profile.name;
   group.userData.trait = profile.trait;
@@ -989,7 +1123,11 @@ export function createCharacter(profile: CharacterProfile): Character {
   const shoeMaterial = material(shoePalette[paletteVariant]!, { surface: "leather" });
 
   const outfitStyle = addOutfit(torso, hips, profile, shirtMaterial, shirtShadow, shirtAccent, trouserMaterial);
-  addMesh(neck, cachedGeometry("neck", () => new THREE.CylinderGeometry(0.16, 0.18, 0.25, 20)), skinMaterial, [0, -0.08, 0]);
+  addMesh(
+    neck,
+    createOrganicSegmentGeometry("neck-smooth", 0.085, -0.235, 0.155, 0.175, 0.18, 0.94),
+    skinMaterial,
+  );
 
   const face = resolveFaceStyle(profile.faceShape);
   const headScale: readonly [number, number, number] = face === "round"
@@ -1171,6 +1309,7 @@ export type CharacterGrounding = {
 const groundingLeftBox = new THREE.Box3();
 const groundingRightBox = new THREE.Box3();
 const groundingWorldPosition = new THREE.Vector3();
+const groundingRightPosition = new THREE.Vector3();
 const groundingWorldScale = new THREE.Vector3();
 
 /**
@@ -1187,6 +1326,28 @@ export function groundCharacterToPlane(
   const planeY = typeof groundY === "number" && Number.isFinite(groundY)
     ? groundY
     : group.getWorldPosition(groundingWorldPosition).y;
+  const authored = character.assetRuntime;
+  if (authored) {
+    const worldScaleY = Math.max(0.0001, Math.abs(group.getWorldScale(groundingWorldScale).y));
+    const leftSoleY = authored.leftSoleMarker.getWorldPosition(groundingWorldPosition).y;
+    const rightSoleY = authored.rightSoleMarker.getWorldPosition(groundingRightPosition).y;
+    const lowestY = Math.min(leftSoleY, rightSoleY);
+    if (Number.isFinite(lowestY)) {
+      authored.visualRoot.position.y += (planeY - lowestY) / worldScaleY;
+      group.updateWorldMatrix(true, true);
+    }
+    const nextLeft = authored.leftSoleMarker.getWorldPosition(groundingWorldPosition).y;
+    const nextRight = authored.rightSoleMarker.getWorldPosition(groundingRightPosition).y;
+    const leftGap = nextLeft - planeY;
+    const rightGap = nextRight - planeY;
+    const minimumGap = Math.min(leftGap, rightGap);
+    return {
+      grounded: Number.isFinite(minimumGap) && Math.abs(minimumGap) <= 0.006,
+      leftGap,
+      rightGap,
+      minimumGap,
+    };
+  }
   groundingLeftBox.setFromObject(joints.leftFoot, true);
   groundingRightBox.setFromObject(joints.rightFoot, true);
   const lowestY = Math.min(groundingLeftBox.min.y, groundingRightBox.min.y);
@@ -1218,6 +1379,22 @@ export function updateCharacter(
   time: number,
   delta: number,
 ): void {
+  const authored = character.assetRuntime;
+  if (authored) {
+    const dt = THREE.MathUtils.clamp(Number.isFinite(delta) ? delta : 1 / 60, 0, 0.1);
+    if (character.animation.state !== state) {
+      character.animation.state = state;
+      character.animation.stateStartedAt = time;
+      const next = authored.actions[state] ?? authored.actions.idle ?? null;
+      if (next && next !== authored.activeAction) {
+        authored.activeAction?.fadeOut(0.16);
+        next.reset().fadeIn(0.16).play();
+        authored.activeAction = next;
+      }
+    }
+    authored.mixer.update(dt);
+    return;
+  }
   const { joints } = character;
   const dt = THREE.MathUtils.clamp(Number.isFinite(delta) ? delta : 1 / 60, 0, 0.1);
   if (character.animation.state !== state) {

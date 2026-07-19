@@ -1,4 +1,9 @@
 import * as THREE from "three";
+import type { CircularObstacle } from "./worldSystems";
+import type {
+  AuthoredEnvironmentAssetId,
+  AuthoredEnvironmentAssets,
+} from "./environmentAssets";
 
 export type TownActivityKind =
   | "home"
@@ -22,6 +27,8 @@ export interface TownEnvironment {
   group: THREE.Group;
   activityPoints: TownActivityPoint[];
   benches: THREE.Group[];
+  obstacles?: CircularObstacle[];
+  visualSource?: "authored" | "procedural";
   update: (time: number) => void;
 }
 
@@ -46,6 +53,15 @@ type GrassTuft = {
 type GrassDetails = {
   mesh: THREE.InstancedMesh;
   tufts: GrassTuft[];
+};
+
+type AuthoredWindObject = {
+  object: THREE.Object3D;
+  baseX: number;
+  baseZ: number;
+  amplitude: number;
+  phase: number;
+  speed: number;
 };
 
 const COLORS = {
@@ -465,13 +481,13 @@ function pbrCompanions(pattern: TexturePattern): THREE.MeshStandardMaterialParam
   return {
     normalMap: pbrTexture(pattern, "normal"),
     normalScale: pattern === "stucco"
-      ? new THREE.Vector2(0.36, 0.36)
+      ? new THREE.Vector2(0.1, 0.1)
       : pattern === "roof" || pattern === "paving"
-        ? new THREE.Vector2(0.62, 0.62)
-        : new THREE.Vector2(0.46, 0.46),
+        ? new THREE.Vector2(0.24, 0.24)
+        : new THREE.Vector2(0.2, 0.2),
     roughnessMap: pbrTexture(pattern, "roughness"),
     aoMap: pbrTexture(pattern, "ao"),
-    aoMapIntensity: pattern === "stucco" ? 0.42 : 0.58,
+    aoMapIntensity: pattern === "stucco" ? 0.26 : 0.38,
   };
 }
 
@@ -906,7 +922,6 @@ function createTiledGableRoof(
     [0, baseY, 0],
   );
   roof.castShadow = true;
-  addEdges(roof, 0x754536, 0.12, 25);
 
   // Cover the solid red end caps with a pale plaster gable. The roof then
   // reads as two tiled slopes sitting on a real timber-framed wall.
@@ -930,7 +945,7 @@ function createTiledGableRoof(
   }
 
   // A single instanced draw creates the repeated rounded terracotta ridges.
-  const rowCount = 8;
+  const rowCount = 18;
   const rows = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.068, 0.075, depth + 0.22, 9),
     toon(new THREE.Color(roofColor).lerp(new THREE.Color(0xf28a5f), 0.32).getHex(), {
@@ -2891,7 +2906,7 @@ function createCompactResidentHome(
     0xd1cbbb,
     [0, 0.19, 0],
     [0, 0, 0],
-    0.1,
+    0.035,
     "paving",
   );
   foundation.receiveShadow = true;
@@ -2907,7 +2922,7 @@ function createCompactResidentHome(
     plasterColor,
     [0, 2.48, 0],
     [0, 0, 0],
-    0.18,
+    0.035,
     "stucco",
   );
   body.castShadow = true;
@@ -2930,8 +2945,8 @@ function createCompactResidentHome(
   createTerracottaCanopy(house, 4.26, 2.98, frontZ + 0.42, clayRoofColor);
 
   const doorX = variant % 2 === 0 ? -0.8 : 0.8;
-  roundedBox(house, [0.96, 2.12, 0.17], trimColor, [doorX, 1.49, frontZ + 0.04], [0, 0, 0], 0.12);
-  roundedBox(house, [0.78, 1.94, 0.12], doorColor, [doorX, 1.49, frontZ + 0.16], [0, 0, 0], 0.1);
+  roundedBox(house, [0.96, 2.12, 0.17], trimColor, [doorX, 1.49, frontZ + 0.04], [0, 0, 0], 0.045);
+  roundedBox(house, [0.78, 1.94, 0.12], doorColor, [doorX, 1.49, frontZ + 0.16], [0, 0, 0], 0.035);
   sphere(house, 0.055, COLORS.gold, [doorX + (doorX < 0 ? 0.25 : -0.25), 1.47, frontZ + 0.27], [1, 1, 0.55]);
   roundedBox(house, [1.2, 0.16, 0.7], 0xcfc6b3, [doorX, 0.13, frontZ + 0.28], [0, 0, 0], 0.06, "paving");
 
@@ -2977,10 +2992,10 @@ function createCompactFacility(
   const [wallColor, roofColor, accentColor, trimColor] = palette[kind];
   const frontZ = 1.84;
   const timberColor = kind === "community" ? 0x775540 : 0x815239;
-  const foundation = roundedBox(facility, [5.45, 0.4, 3.9], 0xcec8b8, [0, 0.2, 0], [0, 0, 0], 0.11, "paving");
+  const foundation = roundedBox(facility, [5.45, 0.4, 3.9], 0xcec8b8, [0, 0.2, 0], [0, 0, 0], 0.035, "paving");
   foundation.receiveShadow = true;
   addStoneFoundationFace(facility, 5.12, frontZ + 0.03, 0.31);
-  const body = roundedBox(facility, [5.14, 3.92, 3.58], wallColor, [0, 2.34, 0], [0, 0, 0], 0.2, "stucco");
+  const body = roundedBox(facility, [5.14, 3.92, 3.58], wallColor, [0, 2.34, 0], [0, 0, 0], 0.035, "stucco");
   body.castShadow = true;
   for (const side of [-1, 1]) {
     box(facility, [0.18, 3.72, 0.18], timberColor, [side * 2.45, 2.37, frontZ]);
@@ -3045,7 +3060,7 @@ function createHomeRoadNetwork(parent: THREE.Object3D): void {
   // doorsteps and building foundations under the same material language.
   const laneMaterial = patternedMaterial(0xe1d4bf, "paving", {
     roughness: 0.99,
-    normalScale: new THREE.Vector2(0.48, 0.48),
+    normalScale: new THREE.Vector2(0.2, 0.2),
   });
   const vertical = addMesh(parent, new THREE.BoxGeometry(5.15, 0.035, 47), laneMaterial, [1, -0.008, 0]);
   const horizontal = addMesh(parent, new THREE.BoxGeometry(47, 0.035, 5.15), laneMaterial, [0, -0.008, 2]);
@@ -3119,15 +3134,15 @@ function createHomeRoadNetwork(parent: THREE.Object3D): void {
 
   const promenade = roundedBox(
     parent,
-    [11.8, 0.035, 4.25],
+    [13.6, 0.035, 5.55],
     0xeee3d1,
-    [-6.25, -0.008, 8.45],
+    [-7.2, -0.008, 8.15],
     [0, 0, 0],
-    0.34,
+    0.05,
     "paving",
   );
   promenade.receiveShadow = true;
-  roundedBox(parent, [4.9, 0.035, 1.55], 0xeee3d1, [-0.2, -0.008, 8.45], [0, 0, 0], 0.2, "paving");
+  roundedBox(parent, [4.9, 0.035, 1.55], 0xeee3d1, [-0.2, -0.008, 8.45], [0, 0, 0], 0.045, "paving");
 
   const lotPads: ReadonlyArray<readonly [number, number, number, number]> = [
     [-9.8, 3.1, 5.4, 4.55],
@@ -3251,7 +3266,198 @@ function createHomeBackdrop(parent: THREE.Object3D): THREE.Group[] {
   return clouds;
 }
 
-function createSunnyHomeTown(): TownEnvironment {
+function placeAuthoredAsset(
+  parent: THREE.Object3D,
+  assets: AuthoredEnvironmentAssets,
+  id: AuthoredEnvironmentAssetId,
+  position: readonly [number, number, number],
+  rotation: readonly [number, number, number] = [0, 0, 0],
+  scale: readonly [number, number, number] = [1, 1, 1],
+): THREE.Group | null {
+  const object = assets.clone(id);
+  if (!object) return null;
+  object.position.set(...position);
+  object.rotation.set(...rotation);
+  object.scale.set(...scale);
+  parent.add(object);
+  return object;
+}
+
+function tintAuthoredDoor(door: THREE.Object3D): void {
+  door.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const sources = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const materials = sources.map((source) => {
+      const material = source.clone();
+      material.userData.sharedEnvironmentAsset = false;
+      const standard = material as THREE.MeshStandardMaterial;
+      if (standard.isMeshStandardMaterial) {
+        if (!standard.name.toLowerCase().includes("glass")) {
+          standard.map = null;
+          standard.color.set(0x3f815c);
+        }
+        standard.roughness = 0.84;
+      }
+      return material;
+    });
+    mesh.material = Array.isArray(mesh.material) ? materials : materials[0]!;
+  });
+}
+
+function createAuthoredHomeDistrict(
+  parent: THREE.Object3D,
+  assets: AuthoredEnvironmentAssets,
+): { wind: AuthoredWindObject[] } | null {
+  const district = new THREE.Group();
+  district.name = "Authored CC0 arrival district";
+  district.userData.sharedEnvironmentAsset = true;
+  parent.add(district);
+
+  const house = new THREE.Group();
+  house.name = "Authored plaster and terracotta home";
+  house.position.set(-9.8, 0, 3.1);
+  // The accepted key art has a broad, welcoming facade rather than a tall
+  // narrow block. Keep the floor height, but stretch the authored modules
+  // horizontally and only slightly in depth.
+  house.scale.set(0.98, 0.78, 0.82);
+  district.add(house);
+  let complete = true;
+  const addHouse = (
+    id: AuthoredEnvironmentAssetId,
+    position: readonly [number, number, number],
+    yaw = 0,
+    scale: readonly [number, number, number] = [1, 1, 1],
+  ) => {
+    const object = placeAuthoredAsset(house, assets, id, position, [0, yaw, 0], scale);
+    complete &&= Boolean(object);
+    return object;
+  };
+
+  // A six-metre ground floor with real window/door openings and a narrower,
+  // offset upper storey. This replaces the rounded-box facade completely.
+  addHouse("Wall_Plaster_Door_Round", [-2, 0, 2]);
+  addHouse("Wall_Plaster_Window_Wide_Round", [0, 0, 2]);
+  addHouse("Wall_Plaster_Window_Wide_Round", [2, 0, 2]);
+  for (const x of [-2, 0, 2]) addHouse("Wall_Plaster_Straight", [x, 0, -2], Math.PI);
+  for (const z of [-1, 1]) {
+    addHouse("Wall_Plaster_Straight", [-3, 0, z], -Math.PI / 2);
+    addHouse("Wall_Plaster_Straight", [3, 0, z], Math.PI / 2);
+  }
+  const door = addHouse("Door_1_Round", [-2.52, 0.02, 2.13]);
+  if (door) tintAuthoredDoor(door);
+  addHouse("Window_Wide_Round1", [0, 0, 2.12]);
+  addHouse("Window_Wide_Round1", [2, 0, 2.12]);
+
+  const upperLeft = -0.35;
+  const upperRight = 1.65;
+  const upperY = 3.08;
+  addHouse("Wall_Plaster_Window_Wide_Round", [upperLeft, upperY, 2]);
+  // An asymmetric timber panel removes the chapel-like row of identical
+  // arches and gives the upper floor the lived-in silhouette of the target.
+  addHouse("Wall_Plaster_Straight", [upperRight, upperY, 2]);
+  addHouse("Window_Wide_Round1", [upperLeft, upperY, 2.12]);
+  addHouse("Window_Wide_Round1", [upperRight, upperY + 0.04, 2.13], 0, [0.56, 0.88, 0.92]);
+  addHouse("Wall_Plaster_Straight", [upperLeft, upperY, -2], Math.PI);
+  addHouse("Wall_Plaster_Straight", [upperRight, upperY, -2], Math.PI);
+  for (const z of [-1, 1]) {
+    addHouse("Wall_Plaster_Straight", [-1.35, upperY, z], -Math.PI / 2);
+    addHouse("Wall_Plaster_Straight", [2.65, upperY, z], Math.PI / 2);
+  }
+  // Turn the ridge parallel to the facade. The earlier orientation exposed a
+  // raw triangular gable and read as an unfinished chapel rather than a home.
+  addHouse("Roof_RoundTiles_4x6", [0.65, 6.05, 0], Math.PI / 2, [0.58, 0.72, 0.92]);
+  // A shallow tiled skirt between floors is the defining Mediterranean layer
+  // in the approved reference and breaks up the previous flat stacked box.
+  addHouse("Roof_RoundTiles_4x6", [0, 3.02, 0.08], Math.PI / 2, [0.61, 0.2, 1.04]);
+  createFabricAwning(house, 1.04, 2.82, 2.38, 1.72, 0x4e9bd3);
+  for (const [x, y, width] of [
+    [0, 0.7, 1.42],
+    [2, 0.7, 1.42],
+    [upperLeft, 3.76, 1.3],
+  ] as const) {
+    box(house, [width, 0.2, 0.34], 0x8d613f, [x, y, 2.3]);
+  }
+
+  // Window boxes use authored flower meshes rather than coloured spheres.
+  for (const [x, y, scale] of [
+    [0, 0.72, 0.29],
+    [2, 0.72, 0.29],
+    [upperLeft, 3.78, 0.25],
+  ] as const) {
+    placeAuthoredAsset(house, assets, "Flower_3_Group", [x, y, 2.36], [0, 0.3, 0], [scale, scale, scale]);
+  }
+
+  if (!complete) {
+    parent.remove(district);
+    return null;
+  }
+
+  const wind: AuthoredWindObject[] = [];
+  const tree = placeAuthoredAsset(
+    district,
+    assets,
+    "CommonTree_1",
+    [-14.1, 0.2, 4.65],
+    [0, -0.28, 0],
+    [0.72, 0.82, 0.72],
+  );
+  if (tree) {
+    wind.push({ object: tree, baseX: 0, baseZ: 0, amplitude: 0.026, phase: 0.4, speed: 0.72 });
+  }
+
+  for (const [x, z, scale, phase] of [
+    [-12.2, 5.25, 0.52, 0.1],
+    [-7.5, 5.05, 0.46, 1.6],
+    [-13.5, 7.25, 0.4, 2.8],
+  ] as const) {
+    const bush = placeAuthoredAsset(
+      district,
+      assets,
+      "Bush_Common_Flowers",
+      [x, 0.18, z],
+      [0, phase, 0],
+      [scale, scale, scale],
+    );
+    if (bush) wind.push({ object: bush, baseX: 0, baseZ: 0, amplitude: 0.045, phase, speed: 1.05 });
+  }
+
+  // Authored uneven-brick PBR tiles form the full foreground walkable street.
+  for (let x = -16; x <= -6; x += 2) {
+    for (let z = 7; z <= 11; z += 2) {
+      placeAuthoredAsset(
+        district,
+        assets,
+        "Floor_UnevenBrick",
+        [x, 0.004, z],
+        [0, (Math.abs(x + z) % 4) * Math.PI / 2, 0],
+        [1.01, 1, 1.01],
+      );
+    }
+  }
+
+  const grassSpots: ReadonlyArray<readonly [number, number, number, number]> = [
+    [-15.3, 6.4, 0.38, 0.2], [-14.8, 6.9, 0.3, 1.1],
+    [-13.9, 6.65, 0.34, 2.1], [-12.8, 6.1, 0.28, 0.7],
+    [-7.35, 5.8, 0.34, 2.8], [-6.9, 6.3, 0.29, 1.8],
+    [-12.4, 4.95, 0.26, 0.9], [-7.7, 4.7, 0.25, 2.4],
+  ];
+  grassSpots.forEach(([x, z, scale, phase], index) => {
+    const grass = placeAuthoredAsset(
+      district,
+      assets,
+      index % 2 === 0 ? "Grass_Common_Short" : "Grass_Wispy_Short",
+      [x, 0.03, z],
+      [0, phase * 1.7, 0],
+      [scale, scale, scale],
+    );
+    if (grass) wind.push({ object: grass, baseX: 0, baseZ: 0, amplitude: 0.13, phase, speed: 1.7 });
+  });
+
+  return { wind };
+}
+
+function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnvironment {
   const group = new THREE.Group();
   group.name = "Sunny Side colourful 3D neighbourhood";
   group.userData.kind = "town-environment";
@@ -3261,6 +3467,7 @@ function createSunnyHomeTown(): TownEnvironment {
   const treeCrowns: TreeCrown[] = [];
   const droplets: JetDrop[] = [];
   const benches: THREE.Group[] = [];
+  const authoredWind: AuthoredWindObject[] = [];
   const ground = cylinder(group, 31, 32, 0.18, 64, COLORS.grass, [0, -0.1, 0]);
   ground.castShadow = false;
   ground.receiveShadow = true;
@@ -3277,9 +3484,13 @@ function createSunnyHomeTown(): TownEnvironment {
   createHomeRoadNetwork(group);
   createHomePlaza(group, droplets);
   const grassDetails = createGrassDetails(group);
+  const authoredDistrict = assets ? createAuthoredHomeDistrict(group, assets) : null;
+  if (authoredDistrict) authoredWind.push(...authoredDistrict.wind);
 
-  createCompactResidentHome(group, -9.8, 3.1, 0xffd5bf, 0xe16759, 0x438d78, 0.035, 0);
-  createCompactResidentHome(group, -15.2, 2.6, 0xd3ebea, 0x5f91bf, 0xe28a58, -0.03, 1);
+  if (!authoredDistrict) {
+    createCompactResidentHome(group, -9.8, 3.1, 0xffd5bf, 0xe16759, 0x438d78, 0.035, 0);
+    createCompactResidentHome(group, -15.2, 2.6, 0xd3ebea, 0x5f91bf, 0xe28a58, -0.03, 1);
+  }
   createCompactResidentHome(group, -15.2, -8.9, 0xffe6a9, 0xe2874f, 0x5a9a78, 0.06, 2);
   createCompactResidentHome(group, -3.1, -12.6, 0xd9e8fb, 0x6b8fc1, 0xd16d72, -0.03, 3);
   createCompactResidentHome(group, 8.6, -10.5, 0xf6d5e5, 0xa86ea7, 0x557fa5, 0.05, 4);
@@ -3288,10 +3499,10 @@ function createSunnyHomeTown(): TownEnvironment {
   createCompactFacility(group, 7.9, -2.2, "cafe");
   createCompactFacility(group, 8.4, 7.65, "market");
 
-  createFence(group, -12.4, 5.95, 5.4, 0.03);
+  if (!authoredDistrict) createFence(group, -12.4, 5.95, 5.4, 0.03);
   createFence(group, -15.2, -6.45, 4.5, -0.03);
   createFence(group, 14.5, 7.35, 4.7, Math.PI);
-  createMailbox(group, -7.6, 5.45, 0xd76561);
+  if (!authoredDistrict) createMailbox(group, -7.6, 5.45, 0xd76561);
   createMailbox(group, -13.1, -6.1, 0x5e8f84);
   createMailbox(group, 12.3, 7.1, 0xe3a64d);
   createTownSign(group, -2.85, 6.25);
@@ -3307,12 +3518,15 @@ function createSunnyHomeTown(): TownEnvironment {
     [5.8, 12.7, 0.84, 3.8],
     [-18.2, 12.6, 0.86, 1.1],
   ];
-  for (const [x, z, scale, phase] of treeData) {
+  for (const [index, [x, z, scale, phase]] of treeData.entries()) {
+    if (authoredDistrict && index === 0) continue;
     createTree(group, treeCrowns, x, z, scale, phase);
   }
 
-  createFlowerPatch(group, -10.6, 6.55, 18, 1);
-  createFlowerPatch(group, -13.4, 7.45, 16, 3);
+  if (!authoredDistrict) {
+    createFlowerPatch(group, -10.6, 6.55, 18, 1);
+    createFlowerPatch(group, -13.4, 7.45, 16, 3);
+  }
   createFlowerPatch(group, 6.9, 12.8, 14, 4);
   createFlowerPatch(group, 14.7, 3.1, 15, 7);
   createFlowerPatch(group, -16.5, -3.5, 12, 9);
@@ -3330,7 +3544,7 @@ function createSunnyHomeTown(): TownEnvironment {
   benches.push(createBench(group, -8.1, -0.15, Math.PI));
   benches.push(createBench(group, -11.2, -5.2, Math.PI / 2));
   benches.push(createBench(group, -5.2, 10.25, Math.PI / 2));
-  benches.push(createBench(group, -11.3, 8.25, -Math.PI / 2));
+  benches.push(createBench(group, -14.1, 10.75, Math.PI));
 
   for (const [x, z] of [
     [-3.1, -0.1],
@@ -3387,6 +3601,13 @@ function createSunnyHomeTown(): TownEnvironment {
       crown.group.rotation.z = Math.sin(time * 0.72 + crown.phase) * 0.025;
       crown.group.rotation.x = Math.cos(time * 0.54 + crown.phase * 1.3) * 0.016;
     }
+    for (const item of authoredWind) {
+      const gust = 0.72 + Math.sin(time * 0.31 + item.phase * 1.9) * 0.28;
+      item.object.rotation.x = item.baseX
+        + Math.sin(time * item.speed + item.phase) * item.amplitude * gust;
+      item.object.rotation.z = item.baseZ
+        + Math.cos(time * item.speed * 0.78 + item.phase * 1.37) * item.amplitude * 0.72 * gust;
+    }
     for (let index = 0; index < grassDetails.tufts.length; index += 1) {
       const tuft = grassDetails.tufts[index];
       const breeze = 0.72 + Math.sin(time * 0.24 + tuft.phase * 0.43) * 0.18;
@@ -3416,7 +3637,31 @@ function createSunnyHomeTown(): TownEnvironment {
     cafeGlow.intensity = 0.23 + Math.sin(time * 1.45 + 0.8) * 0.02;
   };
 
-  return { group, activityPoints, benches, update };
+  const obstacles: CircularObstacle[] | undefined = authoredDistrict
+    ? [
+        { position: [-11.35, 3.1], radius: 1.05 },
+        { position: [-9.8, 3.1], radius: 1.05 },
+        { position: [-8.25, 3.1], radius: 1.05 },
+        { position: [-14.1, 4.65], radius: 0.68 },
+        { position: [-15.2, -8.9], radius: 2.15 },
+        { position: [-3.1, -12.6], radius: 2.1 },
+        { position: [8.6, -10.5], radius: 2.15 },
+        { position: [14.7, -8.5], radius: 2.15 },
+        { position: [14.5, 9.8], radius: 2.1 },
+        { position: [7.9, -2.2], radius: 2.7 },
+        { position: [8.4, 7.65], radius: 2.5 },
+        { position: [-7.7, -5.2], radius: 1.55 },
+      ]
+    : undefined;
+
+  return {
+    group,
+    activityPoints,
+    benches,
+    obstacles,
+    visualSource: authoredDistrict ? "authored" : "procedural",
+    update,
+  };
 }
 
 /**
@@ -3426,10 +3671,13 @@ function createSunnyHomeTown(): TownEnvironment {
  * Bench groups expose `sitPosition`, `sitYaw`, and `interactionRadius` through
  * `userData`, while activity points are stable world-space destinations.
  */
-export function createTown(sceneName: TownSceneName): TownEnvironment {
+export function createTown(
+  sceneName: TownSceneName,
+  assets?: AuthoredEnvironmentAssets | null,
+): TownEnvironment {
   if (sceneName === "shop") return createShopInterior();
   if (sceneName === "interior") return createHomeInterior();
-  if (sceneName === "home") return createSunnyHomeTown();
+  if (sceneName === "home") return createSunnyHomeTown(assets);
 
   const group = new THREE.Group();
   group.name = "Sunny Side Town";
