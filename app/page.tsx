@@ -52,6 +52,24 @@ const starterPeople: Person[] = [
   { id: 3, name: "露露", color: "#ffd0a6", hair: "#e1b84b", shirt: "#7ca9d6", hairStyle: 1, faceShape: 0, eyeStyle: 0, browStyle: 0, noseStyle: 0, mouthStyle: 0, outfitStyle: 3, mood: 74, food: 52, energy: 88, friend: 32, trait: "温柔细腻", dream: "交到三个真正的好朋友" },
 ];
 
+function migrateStarterAppearance(person: Person): Person {
+  const canonical = starterPeople.find((starter) => starter.id === person.id);
+  if (!canonical) return person;
+  return {
+    ...person,
+    color: canonical.color,
+    hair: canonical.hair,
+    shirt: canonical.shirt,
+    hairStyle: canonical.hairStyle,
+    faceShape: canonical.faceShape,
+    eyeStyle: canonical.eyeStyle,
+    browStyle: canonical.browStyle,
+    noseStyle: canonical.noseStyle,
+    mouthStyle: canonical.mouthStyle,
+    outfitStyle: canonical.outfitStyle,
+  };
+}
+
 function characterProfileForPerson(person: Person): CharacterProfile {
   return {
     id: person.id,
@@ -225,7 +243,7 @@ export default function Home() {
         try {
           const parsed = JSON.parse(saved) as Partial<{ people: Person[]; coins: number; day: number; log: string[]; firstPlayedDay: number; weatherSeed: number; lastProcessedDay: number }>;
           if (Array.isArray(parsed.people) && parsed.people.length > 0) {
-            setPeople(parsed.people);
+            setPeople(parsed.people.map(migrateStarterAppearance));
           }
           if (typeof parsed.coins === "number") legacyCoins = parsed.coins;
           if (Array.isArray(parsed.log)) setStoryLog(parsed.log);
