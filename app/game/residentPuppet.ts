@@ -19,11 +19,18 @@ const GRID_ROWS = 56;
 
 export type ResidentPuppetPartName =
   | "head"
+  | "neck"
   | "torso"
   | "leftArm"
+  | "leftForearm"
   | "rightArm"
+  | "rightForearm"
   | "leftLeg"
-  | "rightLeg";
+  | "leftShin"
+  | "leftFoot"
+  | "rightLeg"
+  | "rightShin"
+  | "rightFoot";
 
 type Point = readonly [x: number, y: number];
 
@@ -31,11 +38,18 @@ type PuppetLayout = {
   readonly ground: number;
   readonly hip: Point;
   readonly torso: Point;
+  readonly neck: Point;
   readonly head: Point;
   readonly leftArm: Point;
+  readonly leftForearm: Point;
   readonly rightArm: Point;
+  readonly rightForearm: Point;
   readonly leftLeg: Point;
+  readonly leftShin: Point;
+  readonly leftFoot: Point;
   readonly rightLeg: Point;
+  readonly rightShin: Point;
+  readonly rightFoot: Point;
   readonly leftSole: Point;
   readonly rightSole: Point;
 };
@@ -84,11 +98,18 @@ const BASE_LAYOUT: PuppetLayout = {
   ground: 0.955,
   hip: [0.5, 0.69],
   torso: [0.5, 0.455],
+  neck: [0.5, 0.445],
   head: [0.5, 0.455],
   leftArm: [0.355, 0.47],
+  leftForearm: [0.305, 0.59],
   rightArm: [0.645, 0.47],
+  rightForearm: [0.695, 0.59],
   leftLeg: [0.425, 0.695],
+  leftShin: [0.415, 0.805],
+  leftFoot: [0.405, 0.91],
   rightLeg: [0.575, 0.695],
+  rightShin: [0.585, 0.805],
+  rightFoot: [0.595, 0.91],
   leftSole: [0.405, 0.948],
   rightSole: [0.595, 0.948],
 };
@@ -97,7 +118,11 @@ const SKIRT_LAYOUT: PuppetLayout = {
   ...BASE_LAYOUT,
   hip: [0.5, 0.725],
   leftLeg: [0.425, 0.73],
+  leftShin: [0.415, 0.825],
+  leftFoot: [0.405, 0.915],
   rightLeg: [0.575, 0.73],
+  rightShin: [0.585, 0.825],
+  rightFoot: [0.595, 0.915],
   leftSole: [0.405, 0.95],
   rightSole: [0.595, 0.95],
 };
@@ -106,11 +131,18 @@ const BONE_INDEX = {
   root: 0,
   hips: 1,
   torso: 2,
-  head: 3,
-  leftArm: 4,
-  rightArm: 5,
-  leftLeg: 6,
-  rightLeg: 7,
+  neck: 3,
+  head: 4,
+  leftArm: 5,
+  leftForearm: 6,
+  rightArm: 7,
+  rightForearm: 8,
+  leftLeg: 9,
+  leftShin: 10,
+  leftFoot: 11,
+  rightLeg: 12,
+  rightShin: 13,
+  rightFoot: 14,
 } as const;
 
 let packPromise: Promise<ResidentPuppetPack> | null = null;
@@ -290,7 +322,15 @@ function profileCell(
     const luminance = red * 0.299 + green * 0.587 + blue * 0.114;
     const upperHead = ny < 0.54 && nx > 0.12 && nx < 0.88;
     const brownHair = row < 2 && upperHead && red > green * 1.08 && green > blue * 1.05 && luminance < 145;
-    const blondeHair = row === 2 && upperHead && red > 145 && red > blue * 1.38 && green > blue * 1.18;
+    // Blonde hair and warm skin share red/yellow channels. Protect the broad,
+    // lower-saturation face oval while still tinting the fringe crossing it.
+    const blondeFaceCore = nx > 0.24 && nx < 0.76 && ny > 0.21 && ny < 0.57;
+    const blondeHair = row === 2
+      && upperHead
+      && red > 145
+      && red > blue * 1.38
+      && green > blue * 1.18
+      && !(blondeFaceCore && saturation < 150);
     const hairPixel = brownHair || blondeHair;
     const greenGarment = row === 0 && ny > 0.42 && green > blue * 1.35 && green > red * 0.86 && luminance < 175;
     const orangeGarment = row === 1 && ny > 0.42 && red > 125 && red > green * 1.2 && blue < 105 && saturation > 72;
@@ -350,18 +390,53 @@ function smoothGate(value: number, from: number, to: number): number {
  */
 function skinInfluences(x: number, y: number, skirt: boolean): readonly (readonly [number, number])[] {
   const headGate = 1 - smoothGate(y, 0.43, 0.57);
-  const legGate = smoothGate(y, skirt ? 0.665 : 0.63, skirt ? 0.79 : 0.755);
+  // The skirt itself must travel with the pelvis. Leg influence only starts
+  // once the painted legs emerge below the hem, otherwise the continuous
+  // dress texture splits down the middle during a stride.
+  const legGate = smoothGate(y, skirt ? 0.79 : 0.63, skirt ? 0.86 : 0.755);
   const armGate = smoothGate(y, 0.39, 0.47) * (1 - smoothGate(y, 0.69, 0.79));
   const centerGate = gaussian(x, 0.5, skirt ? 0.23 : 0.205);
+  const leftSide = 1 - smoothGate(x, 0.455, 0.535);
+  const rightSide = smoothGate(x, 0.465, 0.545);
+  const neckGate = gaussian(x, 0.5, 0.14) * gaussian(y, 0.46, 0.055);
+  const kneeY = skirt ? 0.825 : 0.805;
+  const ankleY = skirt ? 0.915 : 0.91;
+  const leftLegMask = skirt ? gaussian(x, 0.425, 0.082) * leftSide : leftSide;
+  const rightLegMask = skirt ? gaussian(x, 0.575, 0.082) * rightSide : rightSide;
+  const shinGate = smoothGate(y, kneeY - 0.035, kneeY + 0.018);
+  const footGate = smoothGate(y, ankleY - 0.035, ankleY + 0.012);
+  const skirtBody = skirt
+    ? gaussian(x, 0.5, 0.25) * (1 - smoothGate(y, 0.785, 0.845))
+    : 0;
+
+  // Grounding reads markers parented to each foot bone. Keep the actual shoe
+  // sole pixels on the same bone so a diagnostic zero gap also means the
+  // painted shoe is visibly on the street, not hovering above or through it.
+  if (y >= 0.92) {
+    const leftSoleMask = gaussian(x, 0.405, 0.072) * leftSide;
+    const rightSoleMask = gaussian(x, 0.595, 0.072) * rightSide;
+    if (leftSoleMask > 0.16 || rightSoleMask > 0.16) {
+      return leftSoleMask >= rightSoleMask
+        ? [[BONE_INDEX.leftFoot, 0.9], [BONE_INDEX.leftShin, 0.1]] as const
+        : [[BONE_INDEX.rightFoot, 0.9], [BONE_INDEX.rightShin, 0.1]] as const;
+    }
+  }
   const scores: Array<readonly [number, number]> = [
     [BONE_INDEX.root, 0.008],
-    [BONE_INDEX.hips, 1.35 * gaussian(x, 0.5, 0.24) * gaussian(y, skirt ? 0.72 : 0.685, 0.105)],
+    [BONE_INDEX.hips, 1.35 * gaussian(x, 0.5, 0.24) * gaussian(y, skirt ? 0.72 : 0.685, 0.105) + 2.25 * skirtBody],
     [BONE_INDEX.torso, 2.15 * centerGate * gaussian(y, 0.56, skirt ? 0.22 : 0.185) * (1 - legGate * 0.65)],
-    [BONE_INDEX.head, 3.2 * gaussian(x, 0.5, 0.32) * gaussian(y, 0.27, 0.245) * headGate],
-    [BONE_INDEX.leftArm, 2.8 * segmentScore(x, y, 0.35, 0.46, 0.255, 0.72, 0.105) * armGate * (1 - smoothGate(x, 0.45, 0.53))],
-    [BONE_INDEX.rightArm, 2.8 * segmentScore(x, y, 0.65, 0.46, 0.745, 0.72, 0.105) * armGate * smoothGate(x, 0.47, 0.55)],
-    [BONE_INDEX.leftLeg, 2.85 * segmentScore(x, y, 0.43, skirt ? 0.715 : 0.68, 0.395, 0.95, 0.105) * legGate * (1 - smoothGate(x, 0.485, 0.535))],
-    [BONE_INDEX.rightLeg, 2.85 * segmentScore(x, y, 0.57, skirt ? 0.715 : 0.68, 0.605, 0.95, 0.105) * legGate * smoothGate(x, 0.465, 0.515)],
+    [BONE_INDEX.neck, 2.4 * neckGate],
+    [BONE_INDEX.head, 3.25 * gaussian(x, 0.5, 0.32) * gaussian(y, 0.27, 0.245) * headGate],
+    [BONE_INDEX.leftArm, 2.75 * segmentScore(x, y, 0.355, 0.46, 0.305, 0.59, 0.105) * armGate * leftSide],
+    [BONE_INDEX.leftForearm, 2.75 * segmentScore(x, y, 0.305, 0.59, 0.255, 0.72, 0.1) * armGate * leftSide],
+    [BONE_INDEX.rightArm, 2.75 * segmentScore(x, y, 0.645, 0.46, 0.695, 0.59, 0.105) * armGate * rightSide],
+    [BONE_INDEX.rightForearm, 2.75 * segmentScore(x, y, 0.695, 0.59, 0.745, 0.72, 0.1) * armGate * rightSide],
+    [BONE_INDEX.leftLeg, 2.8 * segmentScore(x, y, 0.425, skirt ? 0.72 : 0.685, 0.415, kneeY, 0.1) * legGate * leftLegMask * (1 - footGate * 0.78)],
+    [BONE_INDEX.leftShin, 2.85 * segmentScore(x, y, 0.415, kneeY, 0.405, ankleY, 0.09) * legGate * leftLegMask * shinGate],
+    [BONE_INDEX.leftFoot, 2.9 * segmentScore(x, y, 0.405, ankleY, 0.39, 0.955, 0.085) * legGate * leftLegMask * footGate],
+    [BONE_INDEX.rightLeg, 2.8 * segmentScore(x, y, 0.575, skirt ? 0.72 : 0.685, 0.585, kneeY, 0.1) * legGate * rightLegMask * (1 - footGate * 0.78)],
+    [BONE_INDEX.rightShin, 2.85 * segmentScore(x, y, 0.585, kneeY, 0.595, ankleY, 0.09) * legGate * rightLegMask * shinGate],
+    [BONE_INDEX.rightFoot, 2.9 * segmentScore(x, y, 0.595, ankleY, 0.61, 0.955, 0.085) * legGate * rightLegMask * footGate],
   ];
   const strongest = scores.sort((left, right) => right[1] - left[1]).slice(0, 4);
   const total = strongest.reduce((sum, entry) => sum + entry[1], 0) || 1;
@@ -490,43 +565,78 @@ export function attachResidentPuppet(
   hips.name = "puppet-hips";
   const torso = new THREE.Bone();
   torso.name = "puppet-torso";
+  const neck = new THREE.Bone();
+  neck.name = "puppet-neck";
   const head = new THREE.Bone();
   head.name = "puppet-head";
   const leftArm = new THREE.Bone();
   leftArm.name = "puppet-left-arm";
+  const leftForearm = new THREE.Bone();
+  leftForearm.name = "puppet-left-forearm";
   const rightArm = new THREE.Bone();
   rightArm.name = "puppet-right-arm";
+  const rightForearm = new THREE.Bone();
+  rightForearm.name = "puppet-right-forearm";
   const leftLeg = new THREE.Bone();
   leftLeg.name = "puppet-left-leg";
+  const leftShin = new THREE.Bone();
+  leftShin.name = "puppet-left-shin";
+  const leftFoot = new THREE.Bone();
+  leftFoot.name = "puppet-left-foot";
   const rightLeg = new THREE.Bone();
   rightLeg.name = "puppet-right-leg";
+  const rightShin = new THREE.Bone();
+  rightShin.name = "puppet-right-shin";
+  const rightFoot = new THREE.Bone();
+  rightFoot.name = "puppet-right-foot";
   figureRoot.add(hips);
   hips.add(torso, leftLeg, rightLeg);
-  torso.add(head, leftArm, rightArm);
+  torso.add(neck, leftArm, rightArm);
+  neck.add(head);
+  leftArm.add(leftForearm);
+  rightArm.add(rightForearm);
+  leftLeg.add(leftShin);
+  leftShin.add(leftFoot);
+  rightLeg.add(rightShin);
+  rightShin.add(rightFoot);
 
   const hipPosition = absolutePoint(layout.hip, layout);
   const torsoPosition = absolutePoint(layout.torso, layout);
+  const neckPosition = absolutePoint(layout.neck, layout);
   const headPosition = absolutePoint(layout.head, layout);
   const leftArmPosition = absolutePoint(layout.leftArm, layout);
+  const leftForearmPosition = absolutePoint(layout.leftForearm, layout);
   const rightArmPosition = absolutePoint(layout.rightArm, layout);
+  const rightForearmPosition = absolutePoint(layout.rightForearm, layout);
   const leftLegPosition = absolutePoint(layout.leftLeg, layout);
+  const leftShinPosition = absolutePoint(layout.leftShin, layout);
+  const leftFootPosition = absolutePoint(layout.leftFoot, layout);
   const rightLegPosition = absolutePoint(layout.rightLeg, layout);
+  const rightShinPosition = absolutePoint(layout.rightShin, layout);
+  const rightFootPosition = absolutePoint(layout.rightFoot, layout);
   hips.position.copy(hipPosition);
   torso.position.copy(torsoPosition).sub(hipPosition);
-  head.position.copy(headPosition).sub(torsoPosition);
+  neck.position.copy(neckPosition).sub(torsoPosition);
+  head.position.copy(headPosition).sub(neckPosition);
   leftArm.position.copy(leftArmPosition).sub(torsoPosition);
+  leftForearm.position.copy(leftForearmPosition).sub(leftArmPosition);
   rightArm.position.copy(rightArmPosition).sub(torsoPosition);
+  rightForearm.position.copy(rightForearmPosition).sub(rightArmPosition);
   leftLeg.position.copy(leftLegPosition).sub(hipPosition);
+  leftShin.position.copy(leftShinPosition).sub(leftLegPosition);
+  leftFoot.position.copy(leftFootPosition).sub(leftShinPosition);
   rightLeg.position.copy(rightLegPosition).sub(hipPosition);
+  rightShin.position.copy(rightShinPosition).sub(rightLegPosition);
+  rightFoot.position.copy(rightFootPosition).sub(rightShinPosition);
 
   const leftSoleMarker = new THREE.Object3D();
   leftSoleMarker.name = "puppet-left-sole";
-  leftSoleMarker.position.copy(absolutePoint(layout.leftSole, layout)).sub(leftLegPosition);
-  leftLeg.add(leftSoleMarker);
+  leftSoleMarker.position.copy(absolutePoint(layout.leftSole, layout)).sub(leftFootPosition);
+  leftFoot.add(leftSoleMarker);
   const rightSoleMarker = new THREE.Object3D();
   rightSoleMarker.name = "puppet-right-sole";
-  rightSoleMarker.position.copy(absolutePoint(layout.rightSole, layout)).sub(rightLegPosition);
-  rightLeg.add(rightSoleMarker);
+  rightSoleMarker.position.copy(absolutePoint(layout.rightSole, layout)).sub(rightFootPosition);
+  rightFoot.add(rightSoleMarker);
 
   const texture = makeTexture(source, row);
   const material = new THREE.MeshBasicMaterial({
@@ -547,7 +657,21 @@ export function attachResidentPuppet(
   mesh.renderOrder = 5;
   mesh.frustumCulled = false;
   const skeleton = new THREE.Skeleton([
-    figureRoot, hips, torso, head, leftArm, rightArm, leftLeg, rightLeg,
+    figureRoot,
+    hips,
+    torso,
+    neck,
+    head,
+    leftArm,
+    leftForearm,
+    rightArm,
+    rightForearm,
+    leftLeg,
+    leftShin,
+    leftFoot,
+    rightLeg,
+    rightShin,
+    rightFoot,
   ]);
   visualRoot.add(mesh, figureRoot);
   visualRoot.updateMatrixWorld(true);
@@ -559,11 +683,18 @@ export function attachResidentPuppet(
   character.group.add(group);
   const parts: Record<ResidentPuppetPartName, ResidentPuppetPart> = {
     head: part(head),
+    neck: part(neck),
     torso: part(torso),
     leftArm: part(leftArm),
+    leftForearm: part(leftForearm),
     rightArm: part(rightArm),
+    rightForearm: part(rightForearm),
     leftLeg: part(leftLeg),
+    leftShin: part(leftShin),
+    leftFoot: part(leftFoot),
     rightLeg: part(rightLeg),
+    rightShin: part(rightShin),
+    rightFoot: part(rightFoot),
   };
   const runtime: InternalRuntime = {
     character,
@@ -586,7 +717,8 @@ export function attachResidentPuppet(
     hiddenObjects,
   };
   character.group.userData.residentPuppetRuntime = runtime;
-  character.group.userData.characterSource = "sunny-continuous-skinned-resident-v2";
+  character.group.userData.characterSource = "sunny-continuous-skinned-resident-v3";
+  character.group.userData.residentPuppetBoneCount = skeleton.bones.length;
   character.group.userData.displayHeight = DISPLAY_HEIGHT;
   return runtime;
 }
@@ -601,12 +733,26 @@ type PuppetPose = {
   hipsZ: number;
   torsoX: number;
   torsoZ: number;
+  neckX: number;
+  neckZ: number;
   headX: number;
   headZ: number;
   leftArmZ: number;
   rightArmZ: number;
+  leftForearmX: number;
+  rightForearmX: number;
+  leftForearmZ: number;
+  rightForearmZ: number;
   leftLegZ: number;
   rightLegZ: number;
+  leftShinX: number;
+  rightShinX: number;
+  leftShinZ: number;
+  rightShinZ: number;
+  leftFootX: number;
+  rightFootX: number;
+  leftFootZ: number;
+  rightFootZ: number;
   leftLegX: number;
   rightLegX: number;
   leftLegY: number;
@@ -623,12 +769,26 @@ function poseFor(state: CharacterState, elapsed: number): PuppetPose {
     hipsZ: 0,
     torsoX: 0,
     torsoZ: 0,
+    neckX: 0,
+    neckZ: 0,
     headX: 0,
     headZ: 0,
     leftArmZ: 0,
     rightArmZ: 0,
+    leftForearmX: 0,
+    rightForearmX: 0,
+    leftForearmZ: 0,
+    rightForearmZ: 0,
     leftLegZ: 0,
     rightLegZ: 0,
+    leftShinX: 0,
+    rightShinX: 0,
+    leftShinZ: 0,
+    rightShinZ: 0,
+    leftFootX: 0,
+    rightFootX: 0,
+    leftFootZ: 0,
+    rightFootZ: 0,
     leftLegX: 0,
     rightLegX: 0,
     leftLegY: 0,
@@ -642,22 +802,40 @@ function poseFor(state: CharacterState, elapsed: number): PuppetPose {
     const cadence = running ? 11.2 : 7.15;
     const swing = Math.sin(elapsed * cadence);
     const doubleStep = Math.abs(Math.cos(elapsed * cadence));
-    const stride = running ? 0.43 : 0.27;
+    const leftLift = Math.max(0, swing);
+    const rightLift = Math.max(0, -swing);
+    const stride = running ? 0.32 : 0.22;
     pose.rootY = doubleStep * (running ? 0.075 : 0.038);
     pose.rootX = Math.sin(elapsed * cadence * 0.5) * (running ? 0.025 : 0.012);
     pose.hipsZ = swing * (running ? 0.055 : 0.035);
     pose.torsoX = running ? -0.09 : 0;
     pose.torsoZ = -swing * (running ? 0.045 : 0.025);
+    pose.neckX = running ? 0.025 : -doubleStep * 0.006;
+    pose.neckZ = swing * (running ? 0.012 : 0.008);
     pose.headX = running ? 0.055 : -doubleStep * 0.012;
-    pose.headZ = swing * (running ? 0.025 : 0.015);
+    pose.headZ = swing * (running ? 0.018 : 0.01);
     pose.leftArmZ = swing * stride;
     pose.rightArmZ = -swing * stride;
-    pose.leftLegZ = -swing * (running ? 0.38 : 0.235);
-    pose.rightLegZ = swing * (running ? 0.38 : 0.235);
+    pose.leftForearmX = leftLift * (running ? 0.18 : 0.08);
+    pose.rightForearmX = rightLift * (running ? 0.18 : 0.08);
+    pose.leftForearmZ = -0.035 - leftLift * (running ? 0.075 : 0.04);
+    pose.rightForearmZ = 0.035 + rightLift * (running ? 0.075 : 0.04);
+    pose.leftLegZ = -swing * (running ? 0.26 : 0.17);
+    pose.rightLegZ = swing * (running ? 0.26 : 0.17);
+    // Knee bend happens mainly out of the picture plane. This shortens the
+    // lifted leg naturally without stretching the continuous painted skin.
+    pose.leftShinX = leftLift * (running ? 0.42 : 0.26);
+    pose.rightShinX = rightLift * (running ? 0.42 : 0.26);
+    pose.leftShinZ = swing * (running ? 0.07 : 0.045);
+    pose.rightShinZ = -swing * (running ? 0.07 : 0.045);
+    pose.leftFootX = -leftLift * (running ? 0.24 : 0.15) + rightLift * 0.04;
+    pose.rightFootX = -rightLift * (running ? 0.24 : 0.15) + leftLift * 0.04;
+    pose.leftFootZ = -swing * (running ? 0.055 : 0.035);
+    pose.rightFootZ = swing * (running ? 0.055 : 0.035);
     pose.leftLegX = -swing * (running ? 0.04 : 0.018);
     pose.rightLegX = swing * (running ? 0.04 : 0.018);
-    pose.leftLegY = Math.max(0, swing) * (running ? 0.09 : 0.045);
-    pose.rightLegY = Math.max(0, -swing) * (running ? 0.09 : 0.045);
+    pose.leftLegY = leftLift * (running ? 0.075 : 0.038);
+    pose.rightLegY = rightLift * (running ? 0.075 : 0.038);
     pose.shadowScale = 1 - doubleStep * (running ? 0.11 : 0.045);
     return pose;
   }
@@ -665,25 +843,32 @@ function poseFor(state: CharacterState, elapsed: number): PuppetPose {
   const breath = Math.sin(elapsed * 2.05);
   pose.rootY = breath * 0.008;
   pose.torsoScaleY = 1 + breath * 0.009;
+  pose.neckX = -breath * 0.003;
   pose.headX = -breath * 0.007;
   pose.headScaleY = 1 - breath * 0.0025;
   if (state === "talk") {
     const gesture = Math.sin(elapsed * 5.1);
     pose.rootY += Math.sin(elapsed * 2.55) * 0.009;
     pose.torsoZ = Math.sin(elapsed * 1.7) * 0.025;
-    pose.headX = Math.sin(elapsed * 4.4) * 0.035;
-    pose.headZ = Math.sin(elapsed * 2.6) * 0.035;
+    pose.neckX = Math.sin(elapsed * 4.4) * 0.012;
+    pose.neckZ = Math.sin(elapsed * 2.6) * 0.012;
+    pose.headX = Math.sin(elapsed * 4.4) * 0.023;
+    pose.headZ = Math.sin(elapsed * 2.6) * 0.023;
     // A continuous painted skin should flex rather than fold through itself.
     // Keep gestures inside a soft anatomical range and let the torso/head
     // carry the expression instead of stretching the arm artwork into a strip.
     pose.rightArmZ = 0.28 + gesture * 0.1;
+    pose.rightForearmZ = 0.14 + gesture * 0.065;
     pose.leftArmZ = -0.055 - gesture * 0.035;
+    pose.leftForearmZ = -0.025;
   } else if (state === "happy") {
     const bounce = Math.abs(Math.sin(elapsed * 5.5));
     pose.rootY = bounce * 0.105;
     pose.torsoZ = Math.sin(elapsed * 5.5) * 0.045;
     pose.leftArmZ = -0.34 + Math.sin(elapsed * 5.5) * 0.08;
     pose.rightArmZ = 0.34 - Math.sin(elapsed * 5.5) * 0.08;
+    pose.leftForearmZ = -0.16;
+    pose.rightForearmZ = 0.16;
     pose.leftLegZ = -0.055;
     pose.rightLegZ = 0.055;
     pose.headZ = Math.sin(elapsed * 5.5) * 0.065;
@@ -695,16 +880,24 @@ function poseFor(state: CharacterState, elapsed: number): PuppetPose {
     pose.headZ = -0.04;
     pose.leftArmZ = 0.08;
     pose.rightArmZ = -0.08;
+    pose.leftForearmZ = 0.035;
+    pose.rightForearmZ = -0.035;
   } else if (state === "eat") {
     const bite = Math.sin(elapsed * 4.4) * 0.5 + 0.5;
     pose.headX = 0.07 + bite * 0.055;
     pose.leftArmZ = -0.25 - bite * 0.07;
     pose.rightArmZ = 0.25 + bite * 0.07;
+    pose.leftForearmZ = -0.16 - bite * 0.06;
+    pose.rightForearmZ = 0.16 + bite * 0.06;
   } else if (state === "sit") {
     pose.rootY = -0.24;
     pose.torsoX = 0.03;
     pose.leftLegZ = -0.26;
     pose.rightLegZ = 0.26;
+    pose.leftShinX = 0.38;
+    pose.rightShinX = 0.38;
+    pose.leftFootX = -0.16;
+    pose.rightFootX = -0.16;
     pose.leftLegY = 0.13;
     pose.rightLegY = 0.13;
   }
@@ -734,12 +927,26 @@ export function updateResidentPuppet(
   runtime.hips.rotation.z = damp(runtime.hips.rotation.z, pose.hipsZ, 15, dt);
   parts.torso.joint.rotation.x = damp(parts.torso.joint.rotation.x, pose.torsoX, 13, dt);
   parts.torso.joint.rotation.z = damp(parts.torso.joint.rotation.z, pose.torsoZ, 15, dt);
+  parts.neck.joint.rotation.x = damp(parts.neck.joint.rotation.x, pose.neckX, 14, dt);
+  parts.neck.joint.rotation.z = damp(parts.neck.joint.rotation.z, pose.neckZ, 14, dt);
   parts.head.joint.rotation.x = damp(parts.head.joint.rotation.x, pose.headX, 14, dt);
   parts.head.joint.rotation.z = damp(parts.head.joint.rotation.z, pose.headZ, 14, dt);
   parts.leftArm.joint.rotation.z = damp(parts.leftArm.joint.rotation.z, pose.leftArmZ, 18, dt);
   parts.rightArm.joint.rotation.z = damp(parts.rightArm.joint.rotation.z, pose.rightArmZ, 18, dt);
+  parts.leftForearm.joint.rotation.x = damp(parts.leftForearm.joint.rotation.x, pose.leftForearmX, 19, dt);
+  parts.rightForearm.joint.rotation.x = damp(parts.rightForearm.joint.rotation.x, pose.rightForearmX, 19, dt);
+  parts.leftForearm.joint.rotation.z = damp(parts.leftForearm.joint.rotation.z, pose.leftForearmZ, 19, dt);
+  parts.rightForearm.joint.rotation.z = damp(parts.rightForearm.joint.rotation.z, pose.rightForearmZ, 19, dt);
   parts.leftLeg.joint.rotation.z = damp(parts.leftLeg.joint.rotation.z, pose.leftLegZ, 20, dt);
   parts.rightLeg.joint.rotation.z = damp(parts.rightLeg.joint.rotation.z, pose.rightLegZ, 20, dt);
+  parts.leftShin.joint.rotation.x = damp(parts.leftShin.joint.rotation.x, pose.leftShinX, 21, dt);
+  parts.rightShin.joint.rotation.x = damp(parts.rightShin.joint.rotation.x, pose.rightShinX, 21, dt);
+  parts.leftShin.joint.rotation.z = damp(parts.leftShin.joint.rotation.z, pose.leftShinZ, 21, dt);
+  parts.rightShin.joint.rotation.z = damp(parts.rightShin.joint.rotation.z, pose.rightShinZ, 21, dt);
+  parts.leftFoot.joint.rotation.x = damp(parts.leftFoot.joint.rotation.x, pose.leftFootX, 22, dt);
+  parts.rightFoot.joint.rotation.x = damp(parts.rightFoot.joint.rotation.x, pose.rightFootX, 22, dt);
+  parts.leftFoot.joint.rotation.z = damp(parts.leftFoot.joint.rotation.z, pose.leftFootZ, 22, dt);
+  parts.rightFoot.joint.rotation.z = damp(parts.rightFoot.joint.rotation.z, pose.rightFootZ, 22, dt);
 
   const leftLegBase = parts.leftLeg.basePosition;
   const rightLegBase = parts.rightLeg.basePosition;
@@ -826,6 +1033,7 @@ export function disposeResidentPuppet(target: Character | ResidentPuppetRuntime)
   });
   if (runtime.character.group.userData.residentPuppetRuntime === runtime) {
     delete runtime.character.group.userData.residentPuppetRuntime;
+    delete runtime.character.group.userData.residentPuppetBoneCount;
   }
 }
 

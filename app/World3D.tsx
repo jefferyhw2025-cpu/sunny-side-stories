@@ -1328,13 +1328,20 @@ export default function World3D({
           element.dataset.selectedGait = [
             leftLegAngle,
             rightLegAngle,
+            selectedPuppet?.parts.leftShin.joint.rotation.x ?? selected.joints.leftShin.rotation.x,
+            selectedPuppet?.parts.rightShin.joint.rotation.x ?? selected.joints.rightShin.rotation.x,
+            selectedPuppet?.parts.leftFoot.joint.rotation.x ?? selected.joints.leftFoot.rotation.x,
+            selectedPuppet?.parts.rightFoot.joint.rotation.x ?? selected.joints.rightFoot.rotation.x,
+          ].map((value) => THREE.MathUtils.radToDeg(value).toFixed(1)).join(",");
+          element.dataset.selectedArmGait = [
             selectedPuppet?.parts.leftArm.joint.rotation.z ?? selected.joints.leftArm.rotation.x,
             selectedPuppet?.parts.rightArm.joint.rotation.z ?? selected.joints.rightArm.rotation.x,
           ].map((value) => THREE.MathUtils.radToDeg(value).toFixed(1)).join(",");
           element.dataset.gaitSeparated = String(
             selectedPuppet
               ? selectedPuppet.parts.leftLeg.joint !== selectedPuppet.parts.rightLeg.joint
-                && selectedPuppet.parts.leftArm.joint !== selectedPuppet.parts.rightArm.joint
+                && selectedPuppet.parts.leftShin.joint !== selectedPuppet.parts.rightShin.joint
+                && selectedPuppet.parts.leftFoot.joint !== selectedPuppet.parts.rightFoot.joint
               : selected.joints.leftLeg !== selected.joints.rightLeg
                 && selected.joints.leftShin !== selected.joints.rightShin
                 && selected.joints.leftFoot !== selected.joints.rightFoot,
