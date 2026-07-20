@@ -7,19 +7,23 @@ import {
   updateCharacter,
   type Character,
   type CharacterProfile,
+  type CharacterState,
 } from "./game/characters";
 import {
-  attachResidentSprite,
-  preloadResidentSprites,
-  setResidentSpriteView,
-  updateResidentSprite,
-} from "./game/residentSprites";
+  attachResidentPuppet,
+  disposeResidentPuppet,
+  faceResidentPuppetToCamera,
+  groundResidentPuppet,
+  preloadResidentPuppets,
+  updateResidentPuppet,
+} from "./game/residentPuppet";
 
 type Props = {
   profile: CharacterProfile;
 };
 
 function disposeCharacter(character: Character): void {
+  disposeResidentPuppet(character);
   character.assetRuntime?.mixer.stopAllAction();
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
@@ -45,7 +49,7 @@ export default function CharacterPreview3D({ profile }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const characterRef = useRef<Character | null>(null);
-  const rotationRef = useRef(0);
+  const previewStateRef = useRef<CharacterState>("idle");
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -106,14 +110,11 @@ export default function CharacterPreview3D({ profile }: Props) {
       const time = clock.elapsedTime;
       const character = characterRef.current;
       if (character) {
-        updateCharacter(character, "idle", time, delta);
-        setResidentSpriteView(character, rotationRef.current);
-        updateResidentSprite(character, "idle", time);
-        character.group.rotation.y = THREE.MathUtils.lerp(
-          character.group.rotation.y,
-          rotationRef.current + Math.sin(time * 0.55) * 0.06,
-          0.09,
-        );
+        const previewState = previewStateRef.current;
+        updateCharacter(character, previewState, time, delta);
+        updateResidentPuppet(character, previewState, time, delta);
+        faceResidentPuppetToCamera(character, camera, delta);
+        groundResidentPuppet(character, 0);
       }
       renderer.render(scene, camera);
       frame = window.requestAnimationFrame(render);
@@ -138,7 +139,7 @@ export default function CharacterPreview3D({ profile }: Props) {
 
   useEffect(() => {
     let active = true;
-    preloadResidentSprites().then((pack) => {
+    preloadResidentPuppets().then((pack) => {
       const scene = sceneRef.current;
       if (!active || !scene) return;
       if (characterRef.current) {
@@ -146,26 +147,31 @@ export default function CharacterPreview3D({ profile }: Props) {
         disposeCharacter(characterRef.current);
       }
       const character = createCharacter(profile);
-      attachResidentSprite(character, pack);
+      previewStateRef.current = "idle";
+      attachResidentPuppet(character, profile, pack);
       character.group.scale.setScalar(0.82);
       character.group.position.y = 0;
       character.group.rotation.y = 0;
-      setResidentSpriteView(character, rotationRef.current);
       scene.add(character.group);
       characterRef.current = character;
       if (mountRef.current) {
         mountRef.current.dataset.characterVariant = String(
           character.group.userData.authoredVariant ?? "illustrated",
         );
+        mountRef.current.dataset.characterSource = String(
+          character.group.userData.characterSource ?? "procedural-fallback",
+        );
       }
+    }).catch(() => {
+      if (mountRef.current) mountRef.current.dataset.characterSource = "asset-load-error";
     });
     return () => {
       active = false;
     };
   }, [profile]);
 
-  const turn = (amount: number) => {
-    rotationRef.current += amount;
+  const previewAction = (state: CharacterState) => {
+    previewStateRef.current = state;
   };
 
   return (
@@ -174,12 +180,12 @@ export default function CharacterPreview3D({ profile }: Props) {
         ref={mountRef}
         className="creator-3d-canvas"
         role="img"
-        aria-label={`${profile.name || "新居民"}的实时三维造型预览`}
+        aria-label={`${profile.name || "新居民"}的实时骨骼造型预览`}
       />
-      <div className="preview-turner" aria-label="旋转角色预览">
-        <button type="button" onClick={() => turn(-Math.PI / 4)} aria-label="向左旋转角色">↶</button>
-        <span>高清角色</span>
-        <button type="button" onClick={() => turn(Math.PI / 4)} aria-label="向右旋转角色">↷</button>
+      <div className="preview-turner" aria-label="角色骨骼动作预览">
+        <button type="button" onClick={() => previewAction("walk")} aria-label="预览走路">走</button>
+        <span>关节动态</span>
+        <button type="button" onClick={() => previewAction("happy")} aria-label="预览开心动作">乐</button>
       </div>
     </div>
   );

@@ -568,7 +568,7 @@ export default function Home() {
       {showCreate && <div className="modal-bg" onMouseDown={() => setShowCreate(false)}><div className="modal creator-v2" role="dialog" aria-modal="true" aria-labelledby="creator-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="close" onClick={() => setShowCreate(false)} aria-label="关闭居民设计室">×</button>
         <section className="creator-preview-pane">
-          <div className="creator-intro"><small>晴天市 · 居民设计室</small><h2 id="creator-title">创造你的高清居民</h2><p>预览与街区使用同一角色资产。选择造型与配色，再检查正面、侧面和背面。</p></div>
+          <div className="creator-intro"><small>晴天市 · 居民设计室</small><h2 id="creator-title">创造你的高清居民</h2><p>预览与街区使用同一套连续蒙皮角色。选择造型与配色，再点击“走”“乐”检查真实关节动作。</p></div>
           <CharacterPreview3D profile={previewProfile} />
           <label className="name-field">居民名字<input autoFocus value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && !event.nativeEvent.isComposing && createPerson()} placeholder="给居民起个名字" maxLength={8}/></label>
           <label className="trait-field">性格<select value={newTrait} onChange={(event) => setNewTrait(event.target.value)}><option>天马行空</option><option>热情冒险</option><option>温柔细腻</option><option>冷静可靠</option><option>幽默淘气</option></select></label>

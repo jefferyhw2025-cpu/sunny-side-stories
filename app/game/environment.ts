@@ -4,6 +4,10 @@ import type {
   AuthoredEnvironmentAssetId,
   AuthoredEnvironmentAssets,
 } from "./environmentAssets";
+import {
+  createVegetationWindSystem,
+  type VegetationWindSystem,
+} from "./windSystem";
 
 export type TownActivityKind =
   | "home"
@@ -36,32 +40,6 @@ type JetDrop = {
   mesh: THREE.Mesh;
   angle: number;
   phase: number;
-};
-
-type TreeCrown = {
-  group: THREE.Group;
-  phase: number;
-};
-
-type GrassTuft = {
-  position: THREE.Vector3;
-  yaw: number;
-  scale: number;
-  phase: number;
-};
-
-type GrassDetails = {
-  mesh: THREE.InstancedMesh;
-  tufts: GrassTuft[];
-};
-
-type AuthoredWindObject = {
-  object: THREE.Object3D;
-  baseX: number;
-  baseZ: number;
-  amplitude: number;
-  phase: number;
-  speed: number;
 };
 
 const COLORS = {
@@ -1532,7 +1510,7 @@ function createShop(parent: THREE.Object3D, x: number, z: number): THREE.Group {
 
 function createTree(
   parent: THREE.Object3D,
-  crowns: TreeCrown[],
+  wind: VegetationWindSystem,
   x: number,
   z: number,
   scale = 1,
@@ -1572,6 +1550,7 @@ function createTree(
     leaves.scale.set(sx, sy, sz);
     leaves.castShadow = index < 3;
     leaves.receiveShadow = false;
+    wind.attachMesh(leaves, "treeLeaves", phase + index * 0.41);
   });
 
   // Fine leaf puffs are instanced: the crown gains a hand-pruned silhouette
@@ -1618,12 +1597,13 @@ function createTree(
   leafPuffs.instanceMatrix.needsUpdate = true;
   if (leafPuffs.instanceColor) leafPuffs.instanceColor.needsUpdate = true;
   root.add(leafPuffs);
-  crowns.push({ group: root, phase });
+  wind.attachMesh(leafPuffs, "treeLeaves", phase + 1.73);
   return tree;
 }
 
 function createBush(
   parent: THREE.Object3D,
+  wind: VegetationWindSystem,
   x: number,
   z: number,
   scale: number,
@@ -1647,6 +1627,7 @@ function createBush(
     );
     leaves.scale.set(scale * 1.05, scale * 0.76, scale * 0.9);
     leaves.castShadow = index < 2;
+    wind.attachMesh(leaves, "bush", x * 0.17 + z * 0.11 + index * 0.53);
   });
 
   const detailCount = 18;
@@ -1679,10 +1660,12 @@ function createBush(
   if (detail.instanceColor) detail.instanceColor.needsUpdate = true;
   detail.castShadow = false;
   bush.add(detail);
+  wind.attachMesh(detail, "bush", x * 0.17 + z * 0.11 + 2.4);
 }
 
 function createFlowerPatch(
   parent: THREE.Object3D,
+  wind: VegetationWindSystem,
   centerX: number,
   centerZ: number,
   count: number,
@@ -1750,6 +1733,10 @@ function createFlowerPatch(
   centers.instanceMatrix.needsUpdate = true;
   if (petals.instanceColor) petals.instanceColor.needsUpdate = true;
   parent.add(stems, petals, centers);
+  const patchPhase = seed * 0.73 + centerX * 0.13 + centerZ * 0.09;
+  wind.attachMesh(stems, "flower", patchPhase);
+  wind.attachMesh(petals, "flower", patchPhase + 0.16);
+  wind.attachMesh(centers, "flower", patchPhase + 0.21);
 }
 
 function createBench(
@@ -2246,23 +2233,24 @@ function createTownSign(parent: THREE.Object3D, x: number, z: number): void {
   }
 }
 
-function createGrassDetails(parent: THREE.Object3D): GrassDetails {
+function createGrassDetails(
+  parent: THREE.Object3D,
+  wind: VegetationWindSystem,
+): void {
   const maximum = 190;
   const geometry = new THREE.ConeGeometry(0.052, 0.25, 3);
-  // Keep the base of every tuft on the local origin. Rotating an instance can
-  // then bend the blade without lifting its foot away from the terrain.
+  // Keep the base of every tuft on the local origin so the height-weighted
+  // wind shader bends the blade tip without lifting its foot from the ground.
   geometry.translate(0, 0.125, 0);
   const grass = new THREE.InstancedMesh(geometry, toon(COLORS.grassDark, { roughness: 1 }), maximum);
   grass.name = "Fine grass tufts";
   grass.castShadow = false;
   grass.receiveShadow = false;
-  grass.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   const matrix = new THREE.Matrix4();
   const position = new THREE.Vector3();
   const rotation = new THREE.Quaternion();
   const scale = new THREE.Vector3();
   const euler = new THREE.Euler();
-  const tufts: GrassTuft[] = [];
   let placed = 0;
 
   for (let candidate = 0; candidate < 520 && placed < maximum; candidate += 1) {
@@ -2278,7 +2266,6 @@ function createGrassDetails(parent: THREE.Object3D): GrassDetails {
     if (onVerticalRoad || onHorizontalRoad || nearPlaza || nearPond) continue;
 
     const yaw = angle * 1.7;
-    const phase = (candidate * 1.61803398875 + normalizedRadius * Math.PI * 2) % (Math.PI * 2);
     const variation = 0.72 + ((candidate * 29) % 37) / 92;
     position.set(x, 0.005, z);
     euler.set(0, yaw, 0, "YXZ");
@@ -2286,13 +2273,12 @@ function createGrassDetails(parent: THREE.Object3D): GrassDetails {
     scale.set(variation, variation, variation);
     matrix.compose(position, rotation, scale);
     grass.setMatrixAt(placed, matrix);
-    tufts.push({ position: position.clone(), yaw, scale: variation, phase });
     placed += 1;
   }
   grass.count = placed;
   grass.instanceMatrix.needsUpdate = true;
   parent.add(grass);
-  return { mesh: grass, tufts };
+  wind.attachMesh(grass, "grass", 0.37);
 }
 
 function createDistantScenery(parent: THREE.Object3D): THREE.Group[] {
@@ -3308,7 +3294,8 @@ function tintAuthoredDoor(door: THREE.Object3D): void {
 function createAuthoredHomeDistrict(
   parent: THREE.Object3D,
   assets: AuthoredEnvironmentAssets,
-): { wind: AuthoredWindObject[] } | null {
+  wind: VegetationWindSystem,
+): THREE.Group | null {
   const district = new THREE.Group();
   district.name = "Authored CC0 arrival district";
   district.userData.sharedEnvironmentAsset = true;
@@ -3385,7 +3372,15 @@ function createAuthoredHomeDistrict(
     [2, 0.72, 0.29],
     [upperLeft, 3.78, 0.25],
   ] as const) {
-    placeAuthoredAsset(house, assets, "Flower_3_Group", [x, y, 2.36], [0, 0.3, 0], [scale, scale, scale]);
+    const flowers = placeAuthoredAsset(
+      house,
+      assets,
+      "Flower_3_Group",
+      [x, y, 2.36],
+      [0, 0.3, 0],
+      [scale, scale, scale],
+    );
+    if (flowers) wind.attachObject(flowers, "flower", x * 0.31 + y * 0.17);
   }
 
   if (!complete) {
@@ -3393,7 +3388,6 @@ function createAuthoredHomeDistrict(
     return null;
   }
 
-  const wind: AuthoredWindObject[] = [];
   const tree = placeAuthoredAsset(
     district,
     assets,
@@ -3403,7 +3397,12 @@ function createAuthoredHomeDistrict(
     [0.72, 0.82, 0.72],
   );
   if (tree) {
-    wind.push({ object: tree, baseX: 0, baseZ: 0, amplitude: 0.026, phase: 0.4, speed: 0.72 });
+    wind.attachObject(
+      tree,
+      "treeLeaves",
+      0.4,
+      (_mesh, material) => /leav|foliage|needle/i.test(material.name),
+    );
   }
 
   for (const [x, z, scale, phase] of [
@@ -3419,7 +3418,7 @@ function createAuthoredHomeDistrict(
       [0, phase, 0],
       [scale, scale, scale],
     );
-    if (bush) wind.push({ object: bush, baseX: 0, baseZ: 0, amplitude: 0.045, phase, speed: 1.05 });
+    if (bush) wind.attachObject(bush, "bush", phase);
   }
 
   // Authored uneven-brick PBR tiles form the full foreground walkable street.
@@ -3451,10 +3450,10 @@ function createAuthoredHomeDistrict(
       [0, phase * 1.7, 0],
       [scale, scale, scale],
     );
-    if (grass) wind.push({ object: grass, baseX: 0, baseZ: 0, amplitude: 0.13, phase, speed: 1.7 });
+    if (grass) wind.attachObject(grass, "grass", phase);
   });
 
-  return { wind };
+  return district;
 }
 
 function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnvironment {
@@ -3464,10 +3463,9 @@ function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnv
   group.userData.sceneName = "home";
   group.userData.layoutVersion = "warm-village-v3";
 
-  const treeCrowns: TreeCrown[] = [];
   const droplets: JetDrop[] = [];
   const benches: THREE.Group[] = [];
-  const authoredWind: AuthoredWindObject[] = [];
+  const wind = createVegetationWindSystem();
   const ground = cylinder(group, 31, 32, 0.18, 64, COLORS.grass, [0, -0.1, 0]);
   ground.castShadow = false;
   ground.receiveShadow = true;
@@ -3483,9 +3481,8 @@ function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnv
   const canalWater = createCanal(group);
   createHomeRoadNetwork(group);
   createHomePlaza(group, droplets);
-  const grassDetails = createGrassDetails(group);
-  const authoredDistrict = assets ? createAuthoredHomeDistrict(group, assets) : null;
-  if (authoredDistrict) authoredWind.push(...authoredDistrict.wind);
+  createGrassDetails(group, wind);
+  const authoredDistrict = assets ? createAuthoredHomeDistrict(group, assets, wind) : null;
 
   if (!authoredDistrict) {
     createCompactResidentHome(group, -9.8, 3.1, 0xffd5bf, 0xe16759, 0x438d78, 0.035, 0);
@@ -3520,16 +3517,16 @@ function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnv
   ];
   for (const [index, [x, z, scale, phase]] of treeData.entries()) {
     if (authoredDistrict && index === 0) continue;
-    createTree(group, treeCrowns, x, z, scale, phase);
+    createTree(group, wind, x, z, scale, phase);
   }
 
   if (!authoredDistrict) {
-    createFlowerPatch(group, -10.6, 6.55, 18, 1);
-    createFlowerPatch(group, -13.4, 7.45, 16, 3);
+    createFlowerPatch(group, wind, -10.6, 6.55, 18, 1);
+    createFlowerPatch(group, wind, -13.4, 7.45, 16, 3);
   }
-  createFlowerPatch(group, 6.9, 12.8, 14, 4);
-  createFlowerPatch(group, 14.7, 3.1, 15, 7);
-  createFlowerPatch(group, -16.5, -3.5, 12, 9);
+  createFlowerPatch(group, wind, 6.9, 12.8, 14, 4);
+  createFlowerPatch(group, wind, 14.7, 3.1, 15, 7);
+  createFlowerPatch(group, wind, -16.5, -3.5, 12, 9);
   for (const [x, z, scale] of [
     [-10.9, -0.15, 0.76],
     [5.4, 5.8, 0.7],
@@ -3537,7 +3534,7 @@ function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnv
     [11.1, -5.1, 0.76],
     [5.3, -5.6, 0.72],
   ] as const) {
-    createBush(group, x, z, scale);
+    createBush(group, wind, x, z, scale);
   }
 
   benches.push(createBench(group, -4.3, -4.25, -Math.PI / 2));
@@ -3582,10 +3579,6 @@ function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnv
   group.userData.activityPoints = activityPoints;
   group.userData.benches = benches;
 
-  const grassMatrix = new THREE.Matrix4();
-  const grassRotation = new THREE.Quaternion();
-  const grassScale = new THREE.Vector3();
-  const grassEuler = new THREE.Euler(0, 0, 0, "YXZ");
   const update = (time: number): void => {
     if (!Number.isFinite(time)) return;
     for (const drop of droplets) {
@@ -3597,32 +3590,8 @@ function createSunnyHomeTown(assets?: AuthoredEnvironmentAssets | null): TownEnv
       drop.mesh.rotation.y = time * 1.8 + drop.phase * Math.PI * 2;
       drop.mesh.visible = progress < 0.94;
     }
-    for (const crown of treeCrowns) {
-      crown.group.rotation.z = Math.sin(time * 0.72 + crown.phase) * 0.025;
-      crown.group.rotation.x = Math.cos(time * 0.54 + crown.phase * 1.3) * 0.016;
-    }
-    for (const item of authoredWind) {
-      const gust = 0.72 + Math.sin(time * 0.31 + item.phase * 1.9) * 0.28;
-      item.object.rotation.x = item.baseX
-        + Math.sin(time * item.speed + item.phase) * item.amplitude * gust;
-      item.object.rotation.z = item.baseZ
-        + Math.cos(time * item.speed * 0.78 + item.phase * 1.37) * item.amplitude * 0.72 * gust;
-    }
-    for (let index = 0; index < grassDetails.tufts.length; index += 1) {
-      const tuft = grassDetails.tufts[index];
-      const breeze = 0.72 + Math.sin(time * 0.24 + tuft.phase * 0.43) * 0.18;
-      grassEuler.set(
-        Math.sin(time * 1.28 + tuft.phase) * 0.032 * breeze,
-        tuft.yaw,
-        Math.cos(time * 1.06 + tuft.phase * 1.37) * 0.021 * breeze,
-        "YXZ",
-      );
-      grassRotation.setFromEuler(grassEuler);
-      grassScale.setScalar(tuft.scale);
-      grassMatrix.compose(tuft.position, grassRotation, grassScale);
-      grassDetails.mesh.setMatrixAt(index, grassMatrix);
-    }
-    grassDetails.mesh.instanceMatrix.needsUpdate = true;
+    wind.update(time);
+    group.userData.windDiagnostics = wind.getDiagnostics();
     const waterMap = canalWater.material instanceof THREE.MeshPhysicalMaterial ? canalWater.material.map : null;
     if (waterMap) {
       waterMap.offset.x = (time * 0.012) % 1;
@@ -3684,9 +3653,9 @@ export function createTown(
   group.userData.kind = "town-environment";
   group.userData.sceneName = sceneName;
 
-  const treeCrowns: TreeCrown[] = [];
   const droplets: JetDrop[] = [];
   const benches: THREE.Group[] = [];
+  const wind = createVegetationWindSystem();
 
   const ground = cylinder(group, 31, 32, 0.18, 64, COLORS.grass, [0, -0.1, 0]);
   ground.castShadow = false;
@@ -3727,7 +3696,7 @@ export function createTown(
   // The home scene returns its dedicated compact layout above, so the pond is
   // always available in these plaza/cafe exploration scenes.
   parkPond.visible = true;
-  const grassDetails = createGrassDetails(group);
+  createGrassDetails(group, wind);
 
   createHouse(group, -9.8, 3.1, 0xf4d8cb, 0xb95455, 0.04, 1.08);
   createHouse(group, -15.2, 2.6, 0xd8eadf, 0xc96950, -0.03, 1);
@@ -3762,14 +3731,14 @@ export function createTown(
     [-18, -12, 0.9, 1.1],
   ];
   for (const [x, z, scale, phase] of treeData) {
-    createTree(group, treeCrowns, x, z, scale, phase);
+    createTree(group, wind, x, z, scale, phase);
   }
 
-  createFlowerPatch(group, -4.5, -9.3, 14, 1);
-  createFlowerPatch(group, -13.4, 7.4, 16, 3);
-  createFlowerPatch(group, 6.8, 12.9, 12, 4);
-  createFlowerPatch(group, 14.8, 3.2, 15, 7);
-  createFlowerPatch(group, -16.5, -3.5, 10, 9);
+  createFlowerPatch(group, wind, -4.5, -9.3, 14, 1);
+  createFlowerPatch(group, wind, -13.4, 7.4, 16, 3);
+  createFlowerPatch(group, wind, 6.8, 12.9, 12, 4);
+  createFlowerPatch(group, wind, 14.8, 3.2, 15, 7);
+  createFlowerPatch(group, wind, -16.5, -3.5, 10, 9);
 
   const bushData: ReadonlyArray<readonly [number, number, number]> = [
     [-5.3, -0.6, 0.8],
@@ -3780,7 +3749,7 @@ export function createTown(
     [5.3, -5.6, 0.76],
   ];
   for (const [x, z, scale] of bushData) {
-    createBush(group, x, z, scale);
+    createBush(group, wind, x, z, scale);
   }
 
   benches.push(createBench(group, -4.2, -4.4, -Math.PI / 2));
@@ -3866,10 +3835,6 @@ export function createTown(
   group.userData.benches = benches;
 
   const windmillSails = group.getObjectByName("Windmill sails");
-  const grassMatrix = new THREE.Matrix4();
-  const grassRotation = new THREE.Quaternion();
-  const grassScale = new THREE.Vector3();
-  const grassEuler = new THREE.Euler(0, 0, 0, "YXZ");
   const update = (time: number): void => {
     if (!Number.isFinite(time)) return;
 
@@ -3883,23 +3848,8 @@ export function createTown(
       drop.mesh.visible = progress < 0.94;
     }
 
-    for (const crown of treeCrowns) {
-      crown.group.rotation.z = Math.sin(time * 0.72 + crown.phase) * 0.025;
-      crown.group.rotation.x = Math.cos(time * 0.54 + crown.phase * 1.3) * 0.016;
-    }
-
-    for (let index = 0; index < grassDetails.tufts.length; index += 1) {
-      const tuft = grassDetails.tufts[index];
-      const breeze = 0.72 + Math.sin(time * 0.24 + tuft.phase * 0.43) * 0.18;
-      const tiltX = Math.sin(time * 1.28 + tuft.phase) * 0.032 * breeze;
-      const tiltZ = Math.cos(time * 1.06 + tuft.phase * 1.37) * 0.021 * breeze;
-      grassEuler.set(tiltX, tuft.yaw, tiltZ, "YXZ");
-      grassRotation.setFromEuler(grassEuler);
-      grassScale.setScalar(tuft.scale);
-      grassMatrix.compose(tuft.position, grassRotation, grassScale);
-      grassDetails.mesh.setMatrixAt(index, grassMatrix);
-    }
-    grassDetails.mesh.instanceMatrix.needsUpdate = true;
+    wind.update(time);
+    group.userData.windDiagnostics = wind.getDiagnostics();
 
     if (windmillSails) windmillSails.rotation.z = -time * 0.22;
 

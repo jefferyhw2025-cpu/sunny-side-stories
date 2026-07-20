@@ -16,12 +16,15 @@ import {
   type AuthoredEnvironmentAssets,
 } from "./game/environmentAssets";
 import {
-  attachResidentSprite,
-  groundIllustratedResident,
-  preloadResidentSprites,
-  updateResidentSprite,
-  type ResidentSpritePack,
-} from "./game/residentSprites";
+  attachResidentPuppet,
+  disposeResidentPuppet,
+  faceResidentPuppetToCamera,
+  groundResidentPuppet,
+  preloadResidentPuppets,
+  updateResidentPuppet,
+  type ResidentPuppetPack,
+  type ResidentPuppetRuntime,
+} from "./game/residentPuppet";
 import {
   createWorldDirector,
   type CircularObstacle,
@@ -687,9 +690,9 @@ export default function World3D({
   const host = useRef<HTMLDivElement>(null);
   const [renderState, setRenderState] = useState<RenderState>("loading");
   const [environmentAssetsSettled, setEnvironmentAssetsSettled] = useState(false);
-  const [residentSpritesSettled, setResidentSpritesSettled] = useState(false);
+  const [residentPuppetsSettled, setResidentPuppetsSettled] = useState(false);
   const environmentAssetsRef = useRef<AuthoredEnvironmentAssets | null>(null);
-  const residentSpritesRef = useRef<ResidentSpritePack | null>(null);
+  const residentPuppetsRef = useRef<ResidentPuppetPack | null>(null);
   const residentsRef = useRef(residents);
   const runtimeRef = useRef<WorldRuntime | null>(null);
   const residentAppearanceKey = residents
@@ -733,13 +736,16 @@ export default function World3D({
 
   useEffect(() => {
     let active = true;
-    preloadResidentSprites()
+    preloadResidentPuppets()
       .then((assets) => {
-        residentSpritesRef.current = assets;
+        residentPuppetsRef.current = assets;
+      })
+      .catch(() => {
+        residentPuppetsRef.current = null;
       })
       .finally(() => {
         if (!active) return;
-        setResidentSpritesSettled(true);
+        setResidentPuppetsSettled(true);
       });
     return () => {
       active = false;
@@ -749,7 +755,7 @@ export default function World3D({
   useEffect(() => {
     const element = host.current;
     if (!element) return;
-    if (!environmentAssetsSettled || !residentSpritesSettled) {
+    if (!environmentAssetsSettled || !residentPuppetsSettled) {
       queueMicrotask(() => setRenderState("loading"));
       return;
     }
@@ -899,8 +905,10 @@ export default function World3D({
       // both the world and creator. It is built around our life-sim turnaround
       // instead of the mismatched anime GLBs used by the previous prototype.
       const character = createCharacter(preparedProfile);
-      const residentSpritePack = residentSpritesRef.current;
-      if (residentSpritePack) attachResidentSprite(character, residentSpritePack);
+      const residentPuppetPack = residentPuppetsRef.current;
+      if (residentPuppetPack) {
+        attachResidentPuppet(character, preparedProfile, residentPuppetPack);
+      }
       const start = composition.starts[index % composition.starts.length];
       character.group.position.copy(start);
       const sceneScale = location === "home"
@@ -918,7 +926,7 @@ export default function World3D({
         character.group.lookAt(viewCamera.x, 0, viewCamera.z);
       }
       character.group.userData.isSelected = index === 0;
-      character.group.add(createCharacterContactShadow());
+      if (!residentPuppetPack) character.group.add(createCharacterContactShadow());
       character.group.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           if (!object.geometry.boundingSphere) object.geometry.computeBoundingSphere();
@@ -994,7 +1002,7 @@ export default function World3D({
         const character = characterByGroup.get(group);
         if (character) {
           updateCharacter(character, state as CharacterState, elapsed, delta);
-          updateResidentSprite(character, state as CharacterState, elapsed);
+          updateResidentPuppet(character, state as CharacterState, elapsed, delta);
         }
       },
     });
@@ -1281,17 +1289,28 @@ export default function World3D({
         });
       }
 
-      const selectedGrounding = groundIllustratedResident(selected)
+      for (const character of characters) {
+        faceResidentPuppetToCamera(character, camera, delta);
+      }
+
+      const selectedGrounding = groundResidentPuppet(selected)
         ?? groundCharacterToPlane(selected);
       for (let index = 1; index < characters.length; index += 1) {
         const character = characters[index]!;
-        if (!groundIllustratedResident(character)) groundCharacterToPlane(character);
+        if (!groundResidentPuppet(character)) groundCharacterToPlane(character);
       }
 
       if (elapsed - lastDiagnosticAt >= 0.12) {
         lastDiagnosticAt = elapsed;
         const selectedResident = director.residents[0];
         if (selectedResident) {
+          const selectedPuppet = selected.group.userData.residentPuppetRuntime as
+            | ResidentPuppetRuntime
+            | undefined;
+          const leftLegAngle = selectedPuppet?.parts.leftLeg.joint.rotation.z
+            ?? selected.joints.leftLeg.rotation.x;
+          const rightLegAngle = selectedPuppet?.parts.rightLeg.joint.rotation.z
+            ?? selected.joints.rightLeg.rotation.x;
           selected.group.getWorldPosition(selectedPosition);
           const collisionClearance = minimumCollisionClearance(
             director.residents,
@@ -1307,21 +1326,28 @@ export default function World3D({
             .map((value) => value.toFixed(4))
             .join(",");
           element.dataset.selectedGait = [
-            selected.joints.leftLeg.rotation.x,
-            selected.joints.rightLeg.rotation.x,
-            selected.joints.leftShin.rotation.x,
-            selected.joints.rightShin.rotation.x,
-            selected.joints.leftFoot.rotation.x,
-            selected.joints.rightFoot.rotation.x,
+            leftLegAngle,
+            rightLegAngle,
+            selectedPuppet?.parts.leftArm.joint.rotation.z ?? selected.joints.leftArm.rotation.x,
+            selectedPuppet?.parts.rightArm.joint.rotation.z ?? selected.joints.rightArm.rotation.x,
           ].map((value) => THREE.MathUtils.radToDeg(value).toFixed(1)).join(",");
           element.dataset.gaitSeparated = String(
-            selected.joints.leftLeg !== selected.joints.rightLeg
-            && selected.joints.leftShin !== selected.joints.rightShin
-            && selected.joints.leftFoot !== selected.joints.rightFoot,
+            selectedPuppet
+              ? selectedPuppet.parts.leftLeg.joint !== selectedPuppet.parts.rightLeg.joint
+                && selectedPuppet.parts.leftArm.joint !== selectedPuppet.parts.rightArm.joint
+              : selected.joints.leftLeg !== selected.joints.rightLeg
+                && selected.joints.leftShin !== selected.joints.rightShin
+                && selected.joints.leftFoot !== selected.joints.rightFoot,
           );
           element.dataset.gaitPhase = THREE.MathUtils.radToDeg(
-            selected.joints.leftLeg.rotation.x - selected.joints.rightLeg.rotation.x,
+            leftLegAngle - rightLegAngle,
           ).toFixed(1);
+          element.dataset.puppetPartCount = selectedPuppet
+            ? String(Object.keys(selectedPuppet.parts).length)
+            : "0";
+          element.dataset.puppetBoneCount = selectedPuppet
+            ? String(selectedPuppet.skeleton.bones.length)
+            : "0";
           element.dataset.selectedSpeed = selectedResident.velocity.length().toFixed(3);
           element.dataset.playerControl = runtime?.controlMode ?? "auto";
           element.dataset.characterSource = selected.assetRuntime?.source
@@ -1329,8 +1355,30 @@ export default function World3D({
           element.dataset.characterVariant = String(
             selected.group.userData.authoredVariant ?? "procedural",
           );
-          element.dataset.characterAssetDiagnostics = "approved-illustrated-atlas-v1";
+          element.dataset.characterAssetDiagnostics = selectedPuppet
+            ? "single-surface-jointed-character-v1"
+            : "procedural-fallback";
           element.dataset.environmentSource = town.visualSource ?? "procedural";
+          const windDiagnostics = town.group.userData.windDiagnostics as
+            | {
+                time: number;
+                gust: number;
+                direction: readonly [number, number];
+                attachedMeshes: number;
+                byKind: Record<string, number>;
+              }
+            | undefined;
+          element.dataset.windAnimated = String(Boolean(windDiagnostics?.attachedMeshes));
+          element.dataset.windAttachedMeshes = String(windDiagnostics?.attachedMeshes ?? 0);
+          element.dataset.windGust = (windDiagnostics?.gust ?? 0).toFixed(3);
+          element.dataset.windDirection = windDiagnostics
+            ? windDiagnostics.direction.map((value) => value.toFixed(3)).join(",")
+            : "0.000,0.000";
+          element.dataset.windKinds = windDiagnostics
+            ? Object.entries(windDiagnostics.byKind)
+                .map(([kind, count]) => `${kind}:${count}`)
+                .join(",")
+            : "";
           element.dataset.collisionClearance = Number.isFinite(collisionClearance)
             ? collisionClearance.toFixed(4)
             : "none";
@@ -1394,6 +1442,7 @@ export default function World3D({
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleWindowBlur);
       if (runtimeRef.current?.director === director) runtimeRef.current = null;
+      characters.forEach((character) => disposeResidentPuppet(character));
       disposeWorld(world);
       renderer.dispose();
       renderer.forceContextLoss();
@@ -1407,7 +1456,7 @@ export default function World3D({
     weatherMode,
     cinematicView,
     environmentAssetsSettled,
-    residentSpritesSettled,
+    residentPuppetsSettled,
   ]);
 
   useEffect(() => {
